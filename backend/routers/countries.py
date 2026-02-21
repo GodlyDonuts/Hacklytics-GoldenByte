@@ -1,80 +1,99 @@
-"""Country data endpoints.
-
-Serves humanitarian needs aggregated by country from startup-loaded data,
-plus project anomalies and cluster benchmarks from Databricks queries.
-"""
-
-import logging
-
+from fastapi import APIRouter, Request
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Query, Request
 
-from ..services.mismatch_engine import get_cluster_benchmarks, get_project_anomalies
-
-logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _first_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
 
 
 @router.get("/countries")
 async def get_countries(request: Request, year: int = 2024):
-    """Return humanitarian needs aggregated by country for a given year."""
-    data = request.app.state.data
+    data = getattr(request.app.state, "data", None) or {}
     needs_raw = data.get("humanitarian_needs", [])
+    flows_raw = data.get("funding", [])
 
     if not needs_raw:
         return {"year": year, "countries": []}
 
     needs_df = pd.DataFrame(needs_raw)
 
+    # Filter by year via reference_period_start
     ref_col = "reference_period_start"
     if ref_col in needs_df.columns:
-        filtered = needs_df[
+        needs_df = needs_df[
             needs_df[ref_col].astype(str).str.startswith(str(year), na=False)
         ]
-    else:
-        filtered = needs_df
 
-    agg_cols = {}
-    if "population" in filtered.columns:
-        filtered["population"] = pd.to_numeric(filtered["population"], errors="coerce")
-        agg_cols["population"] = "sum"
-    if "location_name" in filtered.columns:
-        agg_cols["location_name"] = "first"
+    # Aggregate needs to country level
+    pop_col = _first_col(needs_df, ["population", "people_in_need"])
+    agg_dict: dict = {"location_name": "first"}
+    if pop_col:
+        # Databricks JSON_ARRAY serialises all values as strings — coerce before summing
+        needs_df[pop_col] = pd.to_numeric(needs_df[pop_col], errors="coerce")
+        agg_dict[pop_col] = "sum"
 
-    if not agg_cols:
-        return {"year": year, "countries": []}
+    country_agg = needs_df.groupby("location_code", as_index=False).agg(agg_dict)
+    if pop_col and pop_col != "people_in_need":
+        country_agg = country_agg.rename(columns={pop_col: "people_in_need"})
 
-    country_agg = (
-        filtered.groupby("location_code")
-        .agg(agg_cols)
-        .reset_index()
-    )
+    # Merge funding flows
+    if flows_raw:
+        flows_df = pd.DataFrame(flows_raw)
 
-    return {"year": year, "countries": country_agg.to_dict(orient="records")}
+        # Filter flows by year
+        yr_col = _first_col(flows_df, ["year", "Year", "fiscal_year"])
+        if yr_col:
+            flows_df = flows_df[flows_df[yr_col].astype(str) == str(year)]
 
+        country_col = _first_col(flows_df, ["location_code", "countryISO3", "iso3"])
+        received_col = _first_col(flows_df, ["funding_usd", "totalFunding", "amountUSD"])
+        requested_col = _first_col(flows_df, ["requirements_usd", "totalRequirements", "requirements"])
 
-@router.get("/projects/anomalies")
-async def list_project_anomalies(country: str | None = Query(default=None)):
-    """Return projects flagged as anomalous by the Isolation Forest model.
+        if country_col and (received_col or requested_col):
+            # Databricks JSON_ARRAY serialises all values as strings — coerce before summing
+            if received_col:
+                flows_df[received_col] = pd.to_numeric(flows_df[received_col], errors="coerce")
+            if requested_col:
+                flows_df[requested_col] = pd.to_numeric(flows_df[requested_col], errors="coerce")
 
-    Optionally filter by ISO3 country code.
-    """
-    try:
-        anomalies = await get_project_anomalies(country)
-        return {"count": len(anomalies), "anomalies": anomalies}
-    except TimeoutError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+            agg_cols: dict = {}
+            if received_col:
+                agg_cols[received_col] = "sum"
+            if requested_col:
+                agg_cols[requested_col] = "sum"
+            # Pass-through scalar fields — take first value per country group
+            for passthrough in ("funding_pct", "appeal_code", "appeal_name"):
+                if passthrough in flows_df.columns:
+                    agg_cols[passthrough] = "first"
 
+            flows_agg = flows_df.groupby(country_col, as_index=False).agg(agg_cols)
+            flows_agg = flows_agg.rename(columns={
+                country_col: "location_code",
+                **(  {received_col:  "funding_usd"}      if received_col  else {}),
+                **({requested_col: "requirements_usd"} if requested_col else {}),
+            })
+            country_agg = country_agg.merge(flows_agg, on="location_code", how="left")
 
-@router.get("/clusters/benchmarks")
-async def list_cluster_benchmarks():
-    """Return per-cluster budget statistics from the benchmarking pipeline."""
-    try:
-        benchmarks = await get_cluster_benchmarks()
-        return {"count": len(benchmarks), "benchmarks": benchmarks}
-    except TimeoutError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    # Derived fields
+    if "funding_usd" in country_agg.columns and "requirements_usd" in country_agg.columns:
+        req = pd.to_numeric(country_agg["requirements_usd"], errors="coerce")
+        rcv = pd.to_numeric(country_agg["funding_usd"], errors="coerce")
+        country_agg["coverage_ratio"] = (rcv / req.replace(0, pd.NA)).clip(upper=1.0).fillna(0)
+
+    if "funding_usd" in country_agg.columns and "people_in_need" in country_agg.columns:
+        pin = pd.to_numeric(country_agg["people_in_need"], errors="coerce")
+        rcv = pd.to_numeric(country_agg["funding_usd"], errors="coerce")
+        country_agg["funding_per_capita"] = (rcv / pin.replace(0, pd.NA)).fillna(0)
+
+    # NaN → None for clean JSON serialisation
+    country_agg = country_agg.where(pd.notna(country_agg), other=None)
+
+    return {
+        "year": year,
+        "countries": country_agg.to_dict(orient="records"),
+    }

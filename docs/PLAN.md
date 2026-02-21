@@ -328,323 +328,199 @@ app.include_router(ask.router, prefix="/api")
 
 Run with: `uvicorn backend.main:app --reload --port 8000`
 
-### 3.3 Data Loading Service — HPC Tools API
+### 3.3 Data Loading Service — Databricks Client
 
-The HPC Tools API v1 is the primary source for plans, funding flows, and project data.
+All data is read from pre-ingested Databricks Delta tables via the SQL Statement API. Results are fetched using `EXTERNAL_LINKS` disposition (guaranteed since byte size exceeds the inline limit).
 
-**Base URL:** `https://api.hpc.tools/v1/public`
-
-**Key endpoints used:**
-
-| Endpoint | Purpose | Example |
-|---|---|---|
-| `GET /plan/year/{year}` | All HRPs for a given year | `/plan/year/2024` |
-| `GET /fts/flow?year={y}&groupby=Country` | Funding flows grouped by country | `/fts/flow?year=2024&groupby=Country` |
-| `GET /project/plan/{planID}` | All projects under a specific HRP | `/project/plan/1190` |
-| `GET /rpm/plan/year/{year}` | Plan metadata including requirements | `/rpm/plan/year/2024` |
+**Required env vars:** `DATABRICKS_HOST`, `DATABRICKS_TOKEN`, `WAREHOUSE_ID` (in `backend/.env`)
 
 ```python
-# backend/services/hpc_client.py
+# backend/services/databricks_client.py
+import json
+import os
 import httpx
 
-HPC_BASE = "https://api.hpc.tools/v1/public"
 
-async def fetch_plans_by_year(year: int) -> dict:
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(f"{HPC_BASE}/plan/year/{year}")
-        resp.raise_for_status()
-        return resp.json()
+async def execute_sql(statement: str, warehouse_id: str | None = None) -> list[dict]:
+    """Execute SQL via EXTERNAL_LINKS disposition and return rows as list of dicts."""
+    host = os.getenv("DATABRICKS_HOST")
+    token = os.getenv("DATABRICKS_TOKEN")
+    wh_id = warehouse_id or os.getenv("WAREHOUSE_ID")
 
-async def fetch_funding_flows(year: int, group_by: str = "Country") -> dict:
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(
-            f"{HPC_BASE}/fts/flow",
-            params={"year": year, "groupby": group_by}
+    missing = []
+    if not host:
+        missing.append("DATABRICKS_HOST")
+    if not token:
+        missing.append("DATABRICKS_TOKEN")
+    if not wh_id:
+        missing.append("WAREHOUSE_ID")
+    if missing:
+        raise ValueError(f"Missing required env vars: {', '.join(missing)}.")
+
+    url = f"{host.rstrip('/')}/api/2.0/sql/statements"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            url,
+            headers=headers,
+            json={
+                "statement": statement,
+                "warehouse_id": wh_id,
+                "wait_timeout": "30s",
+                "format": "JSON_ARRAY",
+                "disposition": "EXTERNAL_LINKS",
+            },
         )
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
 
-async def fetch_projects_for_plan(plan_id: int) -> dict:
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(f"{HPC_BASE}/project/plan/{plan_id}")
-        resp.raise_for_status()
-        return resp.json()
+    if data.get("status", {}).get("state") == "FAILED":
+        raise RuntimeError(data.get("status", {}).get("error", {}).get("message", "SQL failed"))
 
-async def fetch_funding_by_country(country_iso3: str, year: int) -> dict:
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(
-            f"{HPC_BASE}/fts/flow",
-            params={"countryISO3": country_iso3, "year": year}
-        )
-        resp.raise_for_status()
-        return resp.json()
+    manifest = data.get("manifest", {})
+    columns = [c["name"] for c in manifest.get("schema", {}).get("columns", [])]
+    external_links = data.get("result", {}).get("external_links", [])
+
+    if not external_links:
+        raise RuntimeError("No external links in Databricks response.")
+
+    rows: list[list] = []
+
+    # Presigned URLs must NOT include an Authorization header
+    async with httpx.AsyncClient(timeout=120) as fetch_client:
+        for link_info in external_links:
+            ext_url = link_info.get("external_link")
+            if not ext_url:
+                continue
+            chunk_resp = await fetch_client.get(ext_url)
+            chunk_resp.raise_for_status()
+            chunk_data = json.loads(chunk_resp.text)
+            chunk_rows = chunk_data if isinstance(chunk_data, list) else chunk_data.get("data_array", [])
+            rows.extend(chunk_rows)
+
+    return [dict(zip(columns, row)) for row in rows]
 ```
 
-**HPC Flow Response Shape** (relevant fields):
+> **Note:** Databricks `JSON_ARRAY` format serialises all column values (including `BIGINT`, `DECIMAL`, `DOUBLE`) as **strings**. Always call `pd.to_numeric(..., errors="coerce")` before any numeric aggregation.
 
-```json
-{
-  "data": {
-    "report3": {
-      "fundingTotals": {
-        "total": 1234567890
-      }
-    },
-    "flows": [
-      {
-        "id": 123,
-        "amountUSD": 5000000,
-        "sourceObjects": [...],
-        "destinationObjects": [
-          { "type": "Plan", "id": 1190, "name": "Sudan 2024" },
-          { "type": "GlobalCluster", "id": 7, "name": "Health" }
-        ]
-      }
-    ]
-  }
-}
-```
+### 3.4 Unified Data Loader
 
-### 3.4 Data Loading Service — HDX HAPI
-
-HDX HAPI provides standardized humanitarian indicators. Requires an `app_identifier`.
-
-**Base URL:** `https://hapi.humdata.org/api/v2`
-
-**Generating the app_identifier:**
-
-```python
-import base64
-app_identifier = base64.b64encode(b"CrisisTopography:team@hacklytics.org").decode()
-# Result: "Q3Jpc2lzVG9wb2dyYXBoeTp0ZWFtQGhhY2tseXRpY3Mub3Jn"
-```
-
-**Key endpoints used:**
-
-| Endpoint | Purpose |
-|---|---|
-| `GET /affected-people/humanitarian-needs` | People in need, severity by country + admin1 |
-| `GET /coordination-context/funding` | Funding data: funding_usd, requirements_usd, funding_pct by location |
-| `GET /geography-infrastructure/baseline-population` | Population baselines |
-| `GET /affected-people/idps` | Internally displaced persons |
-| `GET /metadata/location` | Country list with ISO3 codes |
-
-```python
-# backend/services/hdx_client.py
-import httpx
-import base64
-
-HDX_BASE = "https://hapi.humdata.org/api/v2"
-APP_ID = base64.b64encode(b"CrisisTopography:team@hacklytics.org").decode()
-
-async def fetch_humanitarian_needs(
-    location_code: str | None = None,
-    year: int | None = None,
-    limit: int = 1000,
-    offset: int = 0
-) -> dict:
-    params = {
-        "app_identifier": APP_ID,
-        "limit": limit,
-        "offset": offset,
-    }
-    if location_code:
-        params["location_code"] = location_code
-    if year:
-        params["reference_period_start"] = f"{year}-01-01"
-        params["reference_period_end"] = f"{year}-12-31"
-
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(
-            f"{HDX_BASE}/affected-people/humanitarian-needs",
-            params=params
-        )
-        resp.raise_for_status()
-        return resp.json()
-
-async def fetch_population(location_code: str | None = None) -> dict:
-    params = {"app_identifier": APP_ID, "limit": 1000}
-    if location_code:
-        params["location_code"] = location_code
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(
-            f"{HDX_BASE}/geography-infrastructure/baseline-population",
-            params=params
-        )
-        resp.raise_for_status()
-        return resp.json()
-```
-
-**HDX HAPI Humanitarian Needs Response Shape:**
-
-```json
-{
-  "data": [
-    {
-      "resource_hdx_id": "...",
-      "location_code": "SDN",
-      "location_name": "Sudan",
-      "admin1_code": "SD01",
-      "admin1_name": "Northern",
-      "sector_code": "HEA",
-      "sector_name": "Health",
-      "population_status": "INN",
-      "population": 1500000,
-      "reference_period_start": "2024-01-01",
-      "reference_period_end": "2024-12-31"
-    }
-  ]
-}
-```
-
-### 3.5 Unified Data Loader
-
-Combines both APIs into a single cached dataset on startup. Funding data comes from HDX HAPI `/coordination-context/funding` endpoint (not HPC FTS), providing `funding_usd`, `requirements_usd`, and `funding_pct` columns keyed by `location_code` (ISO3).
-
-When Databricks tables are available, the loader reads directly from the `workspace.default.funding` Delta table. Otherwise, it falls back to live API calls.
+Queries all four Databricks Delta tables on startup and caches results in `app.state.data`:
 
 ```python
 # backend/services/data_loader.py
-import pandas as pd
-from .hpc_client import fetch_plans_by_year
-from .hdx_client import fetch_humanitarian_needs, fetch_population, fetch_funding
+from .databricks_client import execute_sql
 
-async def load_all_data(years: list[int] = [2023, 2024, 2025]) -> dict:
-    all_plans = []
-    all_funding = []
-    all_needs = []
-
-    for year in years:
-        plans = await fetch_plans_by_year(year)
-        all_plans.extend(plans.get("data", []))
-
-        # Funding from HDX HAPI /coordination-context/funding
-        funding = await fetch_funding(year=year)
-        all_funding.extend(funding.get("data", []))
-
-        needs = await fetch_humanitarian_needs(year=year)
-        all_needs.extend(needs.get("data", []))
-
-    population = await fetch_population()
-
-    # Funding DF has: funding_usd, requirements_usd, funding_pct, location_code, location_name
-    funding_df = pd.DataFrame(all_funding)
-
-    # Join funding with humanitarian needs on location_code (ISO3)
-    needs_df = pd.DataFrame(all_needs)
-
+async def load_all_data() -> dict:
+    plans               = await execute_sql("SELECT * FROM workspace.default.plans")
+    funding             = await execute_sql("SELECT * FROM workspace.default.funding")
+    humanitarian_needs  = await execute_sql("SELECT * FROM workspace.default.humanitarian_needs")
+    population          = await execute_sql("SELECT * FROM workspace.default.population")
     return {
-        "plans": pd.DataFrame(all_plans),
-        "funding": funding_df,
-        "needs": needs_df,
-        "population": pd.DataFrame(population.get("data", [])),
+        "plans": plans,
+        "funding": funding,
+        "humanitarian_needs": humanitarian_needs,
+        "population": population,
     }
 ```
 
-### 3.6 API Router Definitions
+Each value is a `list[dict]` — one dict per row. All numeric values arrive as **strings** from Databricks `JSON_ARRAY` format; coerce with `pd.to_numeric()` before aggregating.
+
+**`workspace.default.funding` column schema:**
+
+| Column | Type | Notes |
+|---|---|---|
+| `location_code` | string | ISO3 country code (join key) |
+| `location_name` | string | Country name |
+| `appeal_code` | string | HRP/appeal identifier |
+| `appeal_name` | string | HRP/appeal display name |
+| `year` | string | Fiscal year |
+| `funding_usd` | string (numeric) | Total funding received (USD) |
+| `requirements_usd` | string (numeric) | Total funding requested (USD) |
+| `funding_pct` | string (numeric) | Pre-computed coverage percentage |
+
+**`workspace.default.humanitarian_needs` column schema (relevant fields):**
+
+| Column | Type | Notes |
+|---|---|---|
+| `location_code` | string | ISO3 country code |
+| `location_name` | string | Country name |
+| `population` | string (numeric) | People in need for this sector/admin row |
+| `reference_period_start` | string | ISO date — used for year filtering |
+
+### 3.5 API Router Definitions
 
 **GET `/api/countries?year=2024`**
 
-Returns enriched country data for globe rendering.
+Returns enriched country data for globe rendering. Response per country:
+
+| Field | Source | Description |
+|---|---|---|
+| `location_code` | `humanitarian_needs` | ISO3 country code |
+| `location_name` | `humanitarian_needs` | Country display name |
+| `people_in_need` | `humanitarian_needs.population` summed | Total PIN for the year |
+| `funding_usd` | `funding.funding_usd` summed | Total funding received |
+| `requirements_usd` | `funding.requirements_usd` summed | Total funding requested |
+| `funding_pct` | `funding.funding_pct` (first) | Pre-computed coverage % |
+| `appeal_code` | `funding.appeal_code` (first) | HRP identifier |
+| `appeal_name` | `funding.appeal_name` (first) | HRP display name |
+| `coverage_ratio` | computed | `funding_usd / requirements_usd`, clamped 0–1 |
+| `funding_per_capita` | computed | `funding_usd / people_in_need` |
 
 ```python
-# backend/routers/countries.py
-from fastapi import APIRouter, Request
-
-router = APIRouter()
-
+# backend/routers/countries.py  (simplified view)
 @router.get("/countries")
 async def get_countries(request: Request, year: int = 2024):
-    data = request.app.state.data
-    needs_df = data["needs"]
-
-    filtered = needs_df[
-        needs_df["reference_period_start"].str.startswith(str(year))
-    ]
-
-    country_agg = filtered.groupby("location_code").agg({
-        "population": "sum",
-        "location_name": "first",
-    }).reset_index()
-
-    return {
-        "year": year,
-        "countries": country_agg.to_dict(orient="records")
-    }
+    data = getattr(request.app.state, "data", None) or {}
+    needs_raw = data.get("humanitarian_needs", [])
+    flows_raw = data.get("funding", [])
+    # 1. Build needs_df, filter by reference_period_start prefix
+    # 2. pd.to_numeric on population before groupby sum → people_in_need
+    # 3. Build flows_df, filter by year, pd.to_numeric on funding_usd / requirements_usd
+    # 4. Groupby location_code, merge, compute coverage_ratio + funding_per_capita
+    # 5. NaN → None, return as list of dicts
 ```
 
 **GET `/api/mismatch?year=2024`**
 
-Returns the mismatch scores — merges severity with funding coverage per country.
+Returns mismatch scores — stub returning placeholder while Databricks ML table is finalised.
 
-```python
-# backend/routers/mismatch.py
-from fastapi import APIRouter, Request
-
-router = APIRouter()
-
-@router.get("/mismatch")
-async def get_mismatch(request: Request, year: int = 2024):
-    # Mismatch data is computed by Databricks and cached
-    # Falls back to on-the-fly calculation if Databricks result unavailable
-    ...
-    return {
-        "year": year,
-        "mismatches": [
-            {
-                "iso3": "SDN",
-                "country": "Sudan",
-                "severity": 4.2,
-                "fundingRequested": 2800000000,
-                "fundingReceived": 840000000,
-                "coverageRatio": 0.30,
-                "mismatchScore": 0.87,
-                "peopleInNeed": 24800000,
-                "fundingPerCapita": 33.87
-            }
-        ]
-    }
-```
-
-**GET `/api/compare?a=SDN&b=UKR`**
+**GET `/api/compare?a=SDN&b=UKR`** *(inactive — router exists, not mounted)*
 
 Side-by-side comparison of two countries.
 
-**POST `/api/ask`** `{ "question": "Why did Sudan receive less funding than Ukraine?" }`
+**POST `/api/ask`** `{ "question": "..." }` *(inactive — router exists, not mounted)*
 
 Proxies to Databricks vector search + LLM for RAG-based answer. Returns text for ElevenLabs to speak.
 
-### 3.7 Backend Directory Structure
+### 3.6 Backend Directory Structure
 
 ```
 backend/
 ├── main.py
 ├── requirements.txt
-├── .env                    # DATABRICKS_HOST, DATABRICKS_TOKEN, ELEVENLABS_API_KEY
+├── .env                      # DATABRICKS_HOST, DATABRICKS_TOKEN, WAREHOUSE_ID
 ├── routers/
-│   ├── countries.py
-│   ├── mismatch.py
-│   ├── compare.py
-│   └── ask.py
+│   ├── countries.py          # GET /api/countries  (active)
+│   ├── mismatch.py           # GET /api/mismatch   (active, stub)
+│   ├── compare.py            # GET /api/compare    (inactive)
+│   └── ask.py                # POST /api/ask       (inactive)
 └── services/
-    ├── hpc_client.py       # HPC Tools API calls
-    ├── hdx_client.py       # HDX HAPI API calls
-    ├── data_loader.py      # Startup data ingestion
-    ├── databricks_client.py# Databricks SQL + Vector Search
-    └── mismatch_engine.py  # Fallback mismatch calculator
+    ├── data_loader.py        # Startup: queries all Databricks tables
+    ├── databricks_client.py  # execute_sql via EXTERNAL_LINKS
+    └── mismatch_engine.py    # Fallback mismatch calculator (empty)
 ```
 
-### 3.8 Backend Deliverables Checklist
+### 3.7 Backend Deliverables Checklist
 
-- [ ] FastAPI app with CORS configured for Next.js
-- [ ] HPC client fetching plans, flows, projects
-- [ ] HDX HAPI client fetching humanitarian needs + population
-- [ ] Startup data loader caching to `app.state`
-- [ ] `/api/countries` endpoint returning enriched country data
-- [ ] `/api/mismatch` endpoint returning mismatch scores
-- [ ] `/api/compare` endpoint for country comparison
-- [ ] `/api/ask` endpoint proxying to Databricks RAG
-- [ ] Fallback mismatch engine for offline Databricks
+- [x] FastAPI app with CORS configured for Next.js
+- [x] `databricks_client.execute_sql` via `EXTERNAL_LINKS` disposition
+- [x] Startup data loader querying all four Databricks tables → `app.state.data`
+- [x] `/api/countries` returning enriched country data (PIN, funding, coverage, per-capita)
+- [ ] `/api/mismatch` endpoint returning real mismatch scores from Databricks ML table
+- [ ] `/api/compare` endpoint for side-by-side country comparison
+- [ ] `/api/ask` endpoint proxying to Databricks Vector Search + LLM
 
 ---
 
@@ -692,7 +568,7 @@ import base64
 
 HPC_BASE = "https://api.hpc.tools/v1/public"
 HDX_BASE = "https://hapi.humdata.org/api/v2"
-APP_ID = base64.b64encode(b"CrisisTopography:team@hacklytics.org").decode()
+APP_ID = base64.b64encode(b"Haxlytics:team@mail.com").decode()
 
 # --- Fetch HRP plans for years 2020-2026 ---
 all_plans = []
@@ -934,13 +810,12 @@ for _, row in mismatch.iterrows():
     coverage = float(row.get("funding_pct", 0) or 0)
     text = (
         f"Country: {row['location_name']} ({row['location_code']}). "
-        f"People in need: {float(row['people_in_need']):,.0f}. "
-        f"Total funding: ${funding_usd:,.0f}. "
-        f"Funding per capita: ${funding_per_capita:.2f}. "
-        f"Funding coverage: {coverage:.1f}%. "
-        f"Mismatch score: {float(row['mismatch_score']):.3f}. "
-        f"Severity rank: {int(row['severity_rank'])}. "
-        f"Funding rank: {int(row['funding_rank'])}."
+        f"People in need: {row['people_in_need']:,.0f}. "
+        f"Total funding: ${row['funding_usd']:,.0f}. "
+        f"Funding per capita: ${row['funding_per_capita']:.2f}. "
+        f"Mismatch score: {row['mismatch_score']:.3f}. "
+        f"Severity rank: {row['severity_rank']}. "
+        f"Funding rank: {row['funding_rank']}."
     )
     documents.append({
         "id": f"{row['location_code']}_{row.get('year', 2024)}",
@@ -1296,35 +1171,36 @@ async def query_llm(prompt: str) -> str:
 ## 6. Data Flow Diagram
 
 ```
-                    ┌──────────────┐     ┌──────────────┐
-                    │  HPC Tools   │     │   HDX HAPI   │
-                    │  API v1      │     │   API v2     │
-                    └──────┬───────┘     └──────┬───────┘
-                           │                    │
-              ┌────────────┴────────────────────┴────────────┐
+              ┌──────────────────────────────────────────────┐
               │           DATABRICKS (Free Edition)          │
               │                                              │
+              │  ┌──────────────────────────────────────┐   │
+              │  │ Delta Tables (workspace.default.*)   │   │
+              │  │  plans · funding · humanitarian_needs │   │
+              │  │  population                           │   │
+              │  └──────────────────────────────────────┘   │
+              │                                              │
               │  ┌─────────────┐  ┌────────────────────────┐ │
-              │  │ Delta Tables│  │  ML: Isolation Forest  │ │
-              │  │ plans       │  │  (project anomalies)   │ │
-              │  │ flows       │  └────────────────────────┘ │
-              │  │ needs       │                             │
-              │  │ population  │  ┌────────────────────────┐ │
-              │  └─────────────┘  │  Vector Search Index   │ │
+              │  │ Computed    │  │  ML: Isolation Forest  │ │
+              │  │ mismatch    │  │  (project anomalies)   │ │
+              │  │ anomalies   │  └────────────────────────┘ │
+              │  │ benchmarks  │                             │
+              │  └─────────────┘  ┌────────────────────────┐ │
+              │                   │  Vector Search Index   │ │
               │                   │  (RAG documents)       │ │
-              │  ┌─────────────┐  └────────────────────────┘ │
-              │  │ Computed    │                             │
-              │  │ mismatch    │  ┌────────────────────────┐ │
-              │  │ anomalies   │  │  Foundation Model API  │ │
-              │  │ benchmarks  │  │  (LLaMA 3.1 70B)      │ │
-              │  └─────────────┘  └────────────────────────┘ │
+              │                   └────────────────────────┘ │
+              │                   ┌────────────────────────┐ │
+              │                   │  Foundation Model API  │ │
+              │                   │  (LLaMA 3.1 70B)      │ │
+              │                   └────────────────────────┘ │
               └──────────────────────┬───────────────────────┘
-                                     │
+                                     │ execute_sql (EXTERNAL_LINKS)
                               ┌──────┴───────┐
                               │   FastAPI    │
-                              │   Backend   │
+                              │   Backend    │
+                              │  (app.state) │
                               └──────┬───────┘
-                                     │
+                                     │ REST (JSON)
               ┌──────────────────────┴───────────────────────┐
               │              NEXT.JS FRONTEND                │
               │                                              │
@@ -1339,39 +1215,25 @@ async def query_llm(prompt: str) -> str:
 
 ## 7. API Reference Cheat Sheet
 
-### HPC Tools API v1
+### FastAPI Backend
 
-**Base:** `https://api.hpc.tools/v1/public`
+**Base:** `http://localhost:8000/api`
 
-| Call | URL |
+| Call | Description |
 |---|---|
-| Plans by year | `GET /plan/year/2024` |
-| Plans by country | `GET /plan/country/SDN` |
-| Funding flows by year | `GET /fts/flow?year=2024&groupby=Country` |
-| Funding flows by country | `GET /fts/flow?countryISO3=SDN&year=2024` |
-| Projects in a plan | `GET /project/plan/{planId}` |
-| Emergencies by year | `GET /emergency/year/2024` |
-| All global clusters | `GET /global-cluster` |
-| All locations | `GET /location` |
+| `GET /countries?year=2024` | Enriched country data for globe (PIN, funding, coverage) |
+| `GET /mismatch?year=2024` | Mismatch scores per country |
+| `GET /compare?a=SDN&b=UKR` | Side-by-side country comparison *(inactive)* |
+| `POST /ask` `{ "question": "..." }` | RAG answer via Databricks *(inactive)* |
 
-No authentication required. Rate-limited; use reasonable delays between bulk requests.
+### Databricks Tables (`workspace.default.*`)
 
-### HDX HAPI v2
-
-**Base:** `https://hapi.humdata.org/api/v2`
-
-All requests require `app_identifier` query param (base64 of `"AppName:email"`).
-
-| Call | URL |
+| Table | Key columns |
 |---|---|
-| Humanitarian needs | `GET /affected-people/humanitarian-needs?location_code=SDN&app_identifier=...` |
-| Funding data | `GET /coordination-context/funding?app_identifier=...&reference_period_start_min=2020-01-01` |
-| Baseline population | `GET /geography-infrastructure/baseline-population?app_identifier=...` |
-| IDPs | `GET /affected-people/idps?app_identifier=...` |
-| Refugees | `GET /affected-people/refugees-persons-of-concern?app_identifier=...` |
-| Locations metadata | `GET /metadata/location?app_identifier=...` |
-
-Generate app_identifier: `base64("AppName:email@domain.com")`
+| `plans` | plan metadata |
+| `funding` | `location_code`, `location_name`, `appeal_code`, `appeal_name`, `year`, `funding_usd`, `requirements_usd`, `funding_pct` |
+| `humanitarian_needs` | `location_code`, `location_name`, `population`, `reference_period_start` |
+| `population` | baseline population data |
 
 ### ElevenLabs
 
