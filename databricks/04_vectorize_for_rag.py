@@ -20,8 +20,13 @@ dbutils.library.restartPython()
 
 # COMMAND ----------
 
+import time
 import pandas as pd
 from databricks.vector_search.client import VectorSearchClient
+
+ENDPOINT_NAME = "crisis-rag-endpoint"
+INDEX_NAME = "workspace.default.rag_index"
+SOURCE_TABLE = "workspace.default.rag_documents"
 
 # COMMAND ----------
 
@@ -77,8 +82,8 @@ print(f"\nSample document:\n{documents[0]['text']}")
 
 docs_pdf = pd.DataFrame(documents)
 docs_sdf = spark.createDataFrame(docs_pdf)
-docs_sdf.write.format("delta").mode("overwrite").saveAsTable("workspace.default.rag_documents")
-print(f"Wrote {docs_sdf.count()} rows to workspace.default.rag_documents")
+docs_sdf.write.format("delta").mode("overwrite").saveAsTable(SOURCE_TABLE)
+print(f"Wrote {docs_sdf.count()} rows to {SOURCE_TABLE}")
 
 # COMMAND ----------
 
@@ -87,65 +92,121 @@ print(f"Wrote {docs_sdf.count()} rows to workspace.default.rag_documents")
 # MAGIC Databricks Free Edition allows 1 Vector Search endpoint, 1 unit.
 # MAGIC The index uses managed embeddings (databricks-bge-large-en) so no GPU needed.
 # MAGIC
-# MAGIC After creating the index, it takes a few minutes to sync and become queryable.
+# MAGIC This cell is idempotent: it tears down any existing index/endpoint
+# MAGIC before recreating them to avoid orphaned resource errors.
 
 # COMMAND ----------
 
-vsc = VectorSearchClient()
+vsc = VectorSearchClient(disable_notice=True)
 
-# Create the endpoint (skip if already exists)
+# --- Tear down existing index if present ---
 try:
-    vsc.create_endpoint(name="crisis-rag-endpoint")
-    print("Created vector search endpoint: crisis-rag-endpoint")
+    vsc.get_index(ENDPOINT_NAME, INDEX_NAME)
+    print(f"Deleting existing index {INDEX_NAME}...")
+    vsc.delete_index(ENDPOINT_NAME, INDEX_NAME)
+    print("Deleted. Waiting for cleanup...")
+    time.sleep(10)
+except Exception:
+    print(f"No existing index {INDEX_NAME} found, skipping delete.")
+
+# --- Tear down existing endpoint if present ---
+try:
+    endpoints = list(vsc.list_endpoints())
+    for ep in endpoints:
+        ep_name = ep.get("name", "") if isinstance(ep, dict) else getattr(ep, "name", "")
+        if ep_name == ENDPOINT_NAME:
+            print(f"Deleting existing endpoint {ENDPOINT_NAME}...")
+            vsc.delete_endpoint(ENDPOINT_NAME)
+            print("Deleted. Waiting for cleanup...")
+            time.sleep(15)
+            break
+    else:
+        print(f"No existing endpoint {ENDPOINT_NAME} found.")
+except Exception as e:
+    print(f"Could not list/delete endpoints: {e}")
+
+# --- Create fresh endpoint ---
+print(f"Creating endpoint {ENDPOINT_NAME}...")
+try:
+    vsc.create_endpoint(name=ENDPOINT_NAME)
+    print("Endpoint creation initiated.")
 except Exception as e:
     if "already exists" in str(e).lower():
-        print("Endpoint crisis-rag-endpoint already exists, reusing.")
+        print("Endpoint already exists, reusing.")
     else:
-        print(f"Endpoint creation error: {e}")
-        print("If on Free Edition, check that you don't already have an endpoint.")
+        raise
+
+# --- Wait for endpoint to come online ---
+print("Waiting for endpoint to come online...")
+for attempt in range(30):
+    try:
+        ep = vsc.get_endpoint(ENDPOINT_NAME)
+        status = ep.get("endpoint_status", {}) if isinstance(ep, dict) else {}
+        state = status.get("state", "UNKNOWN")
+        print(f"  [{attempt+1}/30] Endpoint state: {state}")
+        if state == "ONLINE":
+            print("Endpoint is ONLINE.")
+            break
+    except Exception as e:
+        print(f"  [{attempt+1}/30] Checking... ({e})")
+    time.sleep(20)
+else:
+    print("WARNING: Endpoint did not reach ONLINE state within timeout. Proceeding anyway.")
 
 # COMMAND ----------
 
 # Enable Change Data Feed on the source table (required for Delta Sync index)
-spark.sql("ALTER TABLE workspace.default.rag_documents SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
-print("Enabled Change Data Feed on workspace.default.rag_documents")
-
-# COMMAND ----------
-
-# Create the Delta Sync index
-try:
-    vsc.create_delta_sync_index(
-        endpoint_name="crisis-rag-endpoint",
-        index_name="workspace.default.rag_index",
-        source_table_name="workspace.default.rag_documents",
-        pipeline_type="TRIGGERED",
-        primary_key="id",
-        embedding_source_column="text",
-        embedding_model_endpoint_name="databricks-bge-large-en",
-        columns_to_sync=["id", "text", "location_code", "country_name", "severity", "mismatch_score"]
-    )
-    print("Created vector search index: workspace.default.rag_index")
-    print("Wait a few minutes for the index to sync before querying.")
-except Exception as e:
-    if "already exists" in str(e).lower():
-        print("Index already exists. To recreate, delete it first.")
-    else:
-        print(f"Index creation error: {e}")
-        print("\nIf the embedding model endpoint is not found, try one of:")
-        print("  - databricks-bge-large-en")
-        print("  - databricks-gte-large-en")
-        print("  - system.ai.databricks-bge-large-en")
+spark.sql(f"ALTER TABLE {SOURCE_TABLE} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
+print(f"Enabled Change Data Feed on {SOURCE_TABLE}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 4. Test the Vector Search Index
-# MAGIC Run this cell after waiting a few minutes for the index to sync.
+# MAGIC ## 4. Create Delta Sync Index
+
+# COMMAND ----------
+
+print(f"Creating index {INDEX_NAME}...")
+vsc.create_delta_sync_index(
+    endpoint_name=ENDPOINT_NAME,
+    index_name=INDEX_NAME,
+    source_table_name=SOURCE_TABLE,
+    pipeline_type="TRIGGERED",
+    primary_key="id",
+    embedding_source_column="text",
+    embedding_model_endpoint_name="databricks-bge-large-en",
+    columns_to_sync=["id", "text", "location_code", "country_name", "severity", "mismatch_score"]
+)
+print(f"Index {INDEX_NAME} creation initiated.")
+
+# --- Wait for index to sync ---
+print("Waiting for index to sync...")
+for attempt in range(30):
+    try:
+        idx = vsc.get_index(ENDPOINT_NAME, INDEX_NAME)
+        idx_status = idx.describe()
+        state = idx_status.get("status", {}).get("ready", False)
+        detailed = idx_status.get("status", {}).get("detailed_state", "UNKNOWN")
+        print(f"  [{attempt+1}/30] Index ready: {state}, state: {detailed}")
+        if state:
+            print("Index is ready.")
+            break
+    except Exception as e:
+        print(f"  [{attempt+1}/30] Checking... ({e})")
+    time.sleep(20)
+else:
+    print("WARNING: Index not ready within timeout. It may still be syncing.")
+    print("Run the test cell below in a few minutes.")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 5. Test the Vector Search Index
 
 # COMMAND ----------
 
 try:
-    index = vsc.get_index("crisis-rag-endpoint", "workspace.default.rag_index")
+    index = vsc.get_index(ENDPOINT_NAME, INDEX_NAME)
     results = index.similarity_search(
         query_text="Which country has the worst funding gap?",
         columns=["id", "text", "country_name", "mismatch_score"],
