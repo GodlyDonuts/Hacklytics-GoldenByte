@@ -3,13 +3,14 @@
 import { useConversation } from "@elevenlabs/react";
 import { useCallback, useState, useEffect } from "react";
 import { useGlobeContext } from "@/context/GlobeContext";
+import { queryGenie } from "@/lib/api";
 
 const AGENT_ID = process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID || "agent_1201khzd23t9fsaramppkhnftan0";
 
 export function VoiceAgent() {
     const [isSpacePressed, setIsSpacePressed] = useState(false);
     const [hasStarted, setHasStarted] = useState(false);
-    const { setFlyToCoordinates, setComparisonData, setViewMode, selectedCountry } = useGlobeContext();
+    const { setFlyToCoordinates, setComparisonData, setViewMode, setGenieChartData } = useGlobeContext();
 
     // We pass micMuted dynamic state directly to the hook
     const conversation = useConversation({
@@ -62,42 +63,20 @@ export function VoiceAgent() {
                 });
                 return "Successfully compared the countries. The user can now see the visualization.";
             },
-            reset_view: (parameters: {}) => {
-                console.log("AI called reset_view:", parameters);
-                setFlyToCoordinates({ lat: 0, lng: 0, altitude: 2.5 });
-                return "Zoomed back out to show the full globe.";
-            },
-            generate_report: async (parameters: {}) => {
-                console.log("AI called generate_report:", parameters);
-                try {
-                    const scope = selectedCountry ? "country" : "global";
-                    const url = selectedCountry
-                        ? `/api/report?scope=${scope}&iso3=${selectedCountry}`
-                        : `/api/report?scope=${scope}`;
-
-                    const response = await fetch(process.env.NEXT_PUBLIC_API_URL + url, {
-                        method: 'GET',
-                    });
-
-                    if (!response.ok) {
-                        throw new Error(`Failed to generate report: ${response.statusText}`);
-                    }
-
-                    const blob = await response.blob();
-                    const downloadUrl = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = downloadUrl;
-                    a.download = `Crisis_Topography_Report_${scope}.pdf`;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    window.URL.revokeObjectURL(downloadUrl);
-
-                    return `Successfully generated and downloaded a ${scope} report for the user.`;
-                } catch (err) {
-                    console.error("Report generation failed:", err);
-                    return "There was an error generating the report.";
-                }
+            query_data: (parameters: { question: string }) => {
+                console.log("AI called query_data:", parameters);
+                queryGenie(parameters.question)
+                    .then((result) => {
+                        setGenieChartData({
+                            question: result.question,
+                            columns: result.columns,
+                            rows: result.rows,
+                            description: result.description,
+                            sql: result.sql,
+                        });
+                    })
+                    .catch((err) => console.error("Genie query failed:", err));
+                return "Querying the database now. Results will appear on screen shortly.";
             },
             end_conversation: (parameters: {}) => {
                 console.log("AI called end_conversation:", parameters);

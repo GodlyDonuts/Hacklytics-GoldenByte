@@ -63,9 +63,9 @@ export default function GlobeView() {
           tiltAngle: 0,
           tiltDirection: 0,
           country,
-          crisis: crises[0] // pick the first one for tooltip info if needed
+          crisis: crises[0]
         });
-        return; // Move to next country
+        return;
       }
 
       crises.forEach((crisis, index) => {
@@ -92,7 +92,7 @@ export default function GlobeView() {
             color = '#fbff00'; // weak yellow
           }
         } else if (viewMode === 'anomalies') {
-          let sumB2B = crisis.avg_b2b_ratio || 0;
+          let sumB2B = crisis.b2b_ratio || 0;
           weight = Math.min(sumB2B / 100, 1.0);
           color = '#ffff00'; // yellow
         }
