@@ -31,7 +31,7 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
   const [hasStarted, setHasStarted] = useState(false);
   const [textInput, setTextInput] = useState('');
   const [textError, setTextError] = useState<string | null>(null);
-  const { setFlyToCoordinates, setComparisonData, setViewMode } = useGlobeContext();
+  const { setFlyToCoordinates, setComparisonData, setViewMode, setGenieChartData } = useGlobeContext();
   const conversationRef = useRef<ReturnType<typeof useConversation> | null>(null);
 
   const conversation = useConversation({
@@ -81,6 +81,30 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
           targetStats: parameters.targetStats,
         });
         return 'Successfully compared the countries. The user can now see the visualization.';
+      },
+      query_data: async (parameters: { question: string }) => {
+        try {
+          const resp = await fetch(
+            `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/genie`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ question: parameters.question }),
+            }
+          );
+          if (!resp.ok) return `Query failed: HTTP ${resp.status}`;
+          const data = await resp.json();
+          setGenieChartData({
+            question: parameters.question,
+            columns: data.columns || [],
+            rows: data.rows || [],
+            description: data.description,
+            sql: data.sql,
+          });
+          return data.description || 'Query completed. Results are displayed on screen.';
+        } catch (err) {
+          return `Query failed: ${err instanceof Error ? err.message : String(err)}`;
+        }
       },
       end_conversation: () => {
         setHasStarted(false);
