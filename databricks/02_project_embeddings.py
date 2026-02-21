@@ -198,7 +198,11 @@ projects_df["requested_funds"] = pd.to_numeric(projects_df["requested_funds"], e
 
 # Filter to projects with budget
 projects_df = projects_df[projects_df["requested_funds"] > 0].copy()
+projects_df["year"] = projects_df["year"].astype(int)
+projects_df["iso3"] = projects_df["iso3"].str.strip().str.upper()
 print(f"Projects with budget > 0: {len(projects_df)}")
+print(f"Project ISO3 samples: {sorted(projects_df['iso3'].unique())[:20]}")
+print(f"Project year dtype: {projects_df['year'].dtype}")
 
 # Aggregate targeted beneficiaries per country-year
 if len(tgt_raw) > 0:
@@ -224,7 +228,10 @@ if len(tgt_raw) > 0:
     )
     tgt_agg = tgt_agg.rename(columns={"location_code": "iso3"})
     tgt_agg["iso3"] = tgt_agg["iso3"].str.strip().str.upper()
+    tgt_agg["year"] = tgt_agg["year"].astype(int)
     print(f"TGT aggregated: {len(tgt_agg)} country-year rows")
+    print(f"TGT countries: {sorted(tgt_agg['iso3'].unique())}")
+    print(f"TGT years: {sorted(tgt_agg['year'].unique())}")
 else:
     tgt_agg = pd.DataFrame(columns=["iso3", "year", "country_tgt"])
     print("No TGT data available")
@@ -241,6 +248,15 @@ projects_df = projects_df.merge(country_yr_budget, on=["iso3", "year"], how="lef
 projects_df["budget_share"] = projects_df["requested_funds"] / projects_df["country_year_budget"]
 
 # Join country-level TGT and allocate proportionally
+# Debug: check overlap before merge
+proj_keys = set(zip(projects_df["iso3"], projects_df["year"]))
+tgt_keys = set(zip(tgt_agg["iso3"], tgt_agg["year"]))
+overlap = proj_keys & tgt_keys
+print(f"Project country-years: {len(proj_keys)}, TGT country-years: {len(tgt_keys)}, Overlap: {len(overlap)}")
+if len(overlap) == 0 and len(tgt_keys) > 0:
+    print(f"Sample project keys: {sorted(proj_keys)[:5]}")
+    print(f"Sample TGT keys: {sorted(tgt_keys)[:5]}")
+
 projects_df = projects_df.merge(tgt_agg, on=["iso3", "year"], how="left")
 projects_df["target_beneficiaries"] = (
     projects_df["country_tgt"].fillna(0) * projects_df["budget_share"]
