@@ -1,9 +1,0 @@
-{"sessionId": "0b1fb7", "hypothesisId": "H1", "location": "main.py:lifespan", "message": "before load_all_data", "data": {}, "timestamp": 1771659438332.4202}
-{"sessionId": "0b1fb7", "hypothesisId": "H2", "location": "data_loader.py:load_all_data", "message": "calling execute_sql", "data": {}, "timestamp": 1771659438332.4958}
-{"sessionId": "0b1fb7", "hypothesisId": "H1", "location": "main.py:lifespan", "message": "before load_all_data", "data": {}, "timestamp": 1771659440228.417}
-{"sessionId": "0b1fb7", "hypothesisId": "H2", "location": "data_loader.py:load_all_data", "message": "calling execute_sql", "data": {}, "timestamp": 1771659440228.5068}
-{"sessionId": "0b1fb7", "hypothesisId": "H1", "location": "main.py:lifespan", "message": "before load_all_data", "data": {}, "timestamp": 1771659484522.293}
-{"sessionId": "0b1fb7", "hypothesisId": "H2", "location": "data_loader.py:load_all_data", "message": "calling execute_sql", "data": {}, "timestamp": 1771659484522.378}
-{"sessionId": "0b1fb7", "hypothesisId": "H1", "location": "main.py:lifespan", "message": "before load_all_data", "data": {}, "timestamp": 1771659510413.3452}
-{"sessionId": "0b1fb7", "hypothesisId": "H2", "location": "data_loader.py:load_all_data", "message": "calling execute_sql", "data": {}, "timestamp": 1771659510413.428}
-{"sessionId": "0b1fb7", "hypothesisId": "H1", "location": "main.py:lifespan", "message": "before load_all_data", "data": {}, "timestamp": 1771659533844.466}
