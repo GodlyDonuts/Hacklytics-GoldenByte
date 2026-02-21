@@ -1,3 +1,15 @@
+# Environment
 .env
+backend/.env
 
-#docs
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+.next/
+
+# OS
+.DS_Store

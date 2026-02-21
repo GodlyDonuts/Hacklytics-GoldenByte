@@ -1,60 +1,117 @@
-# SYSTEM INITIALIZATION: MISSION CONTROL - HACKLYTICS 2026
-**Role:** Lead Autonomous AI Engineer & Technical Architect
-**Project Name:** Crisis Topography Command Center
-**Objective:** Build an interactive, 3D topographic crisis management platform mapping humanitarian funding mismatches using satellite data, semantic search, and RAG.
-**Budget Context:** You have access to $1000 in MCP/Cloud credits. Prioritize deploying heavy compute tasks (Actian Vector DB, Databricks data processing, local LLMs) to remote instances. 
+# Crisis Topography Command Center
 
-## ⚠️ THE VIBECODING COLLABORATION PROTOCOL (CRITICAL)
-You are part of a swarm of autonomous agents managed by human "vibecoders." Your absolute highest priority before, during, and after writing code is maintaining a **perfect state and context layer**. 
+Interactive 3D globe mapping humanitarian funding mismatches — built for Hacklytics 2026.
 
-Before writing any application code, you must initialize a `docs/` directory and create the following Markdown files. You will continuously update `CURRENT_STATE.md` after every successful script or feature implementation.
+## Prerequisites
 
-1. `docs/00_ARCHITECTURE_MASTER.md`: The tech stack, cloud deployment map (Vultr/MCP), and API key structure.
-2. `docs/01_DATA_PIPELINE.md`: Instructions for the Databricks/Spark pipeline processing UN HNO, HRP, and Population datasets.
-3. `docs/02_VECTOR_DB_RAG.md`: Setup instructions and schema for the Actian VectorAI DB (Docker: `williamimoh/actian-vectorai-db:1.0b`) and Gemini API RAG implementation.
-4. `docs/03_FRONTEND_3D.md`: Specifications for the React/Three.js Command Center and ElevenLabs audio alert integration.
-5. `docs/04_HACKATHON_LOGISTICS.md`: Devpost submission links, track requirements, and the solo Figma Make data-export pipeline (<5MB limit).
-6. `CURRENT_STATE.md`: A living document containing:
-   - "What was just completed"
-   - "What is currently broken/pending"
-   - "Next immediate step for any agent reading this file."
+- **Node.js** 18+ and npm
+- **Python** 3.11+
+- API keys for: ElevenLabs, Databricks (Free Edition)
 
-**Rule:** Any new agent joining the project will be prompted to read `CURRENT_STATE.md` first. Keep it flawlessly accurate.
+## Quick Start
 
----
+### 1. Clone and configure environment
 
-## 🏗️ PHASE-BY-PHASE EXECUTION PLAN
+```bash
+git clone <repo-url>
+cd Hacklytics-GoldenByte
+cp .env.example .env
+```
 
-### PHASE 1: Data Engineering & Infrastructure (Execute First)
-1. **Initialize Cloud/MCP:** Write the Terraform/deployment scripts to spin up remote GPU instances using our credits.
-2. **Database Setup:** Create a `docker-compose.yml` to pull and run `williamimoh/actian-vectorai-db:1.0b`.
-3. **Data Ingestion Script:** Write a Python script to ingest UN datasets (Humanitarian Needs Overview, Humanitarian Response Plan, Population Data).
-4. **The "Medical Desert" Algorithm:** Write logic to calculate the "Beneficiary-to-Health-Budget Ratio." Identify regions where physical terrain (satellite/OpenStreetMap data) hinders medical aid. 
-*-> Update `CURRENT_STATE.md` upon completion.*
+Open `.env` and fill in your keys:
 
-### PHASE 2: Semantic Backend & AI (The RAG Layer)
-1. **Embedding Generation:** Write a pipeline to convert UN crisis reports into vector embeddings and store them in the Actian DB.
-2. **Gemini API Integration:** Implement the LLM reasoning layer. 
-   - *Requirement:* The system must accept natural language queries (e.g., "Find regions where flood risk is high but medical funding is less than $1M").
-   - *Requirement:* Use Gemini to query the Actian Vector DB, retrieve similar crisis projects, and generate actionable summaries.
-*-> Update `CURRENT_STATE.md` upon completion.*
+```
+ELEVENLABS_API_KEY=your_key
+NEXT_PUBLIC_ELEVENLABS_AGENT_ID=your_agent_id
+DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
+DATABRICKS_TOKEN=your_token
+```
 
-### PHASE 3: The Command Center (Frontend & Audio)
-1. **3D Topography Map:** Initialize a React frontend (using Three.js, React-Three-Fiber, or Mapbox 3D). 
-   - *Visuals:* Height = Crisis Severity; Color = Funding Gap.
-2. **ElevenLabs Audio Alerts:** Create an emergency broadcast module. When a user clicks a "critical" region, trigger an ElevenLabs API call to read the generated Gemini summary in a realistic, urgent voice.
-3. **Figma Export Pipeline:** Write a utility function that strips the massive UN dataset down to a highly aggregated JSON file strictly **under 5MB**. This is for a specific team member to use for the solo Figma Make Devpost submission.
-*-> Update `CURRENT_STATE.md` upon completion.*
+### 2. Backend setup
 
-### PHASE 4: Safety Layer & Deployment
-1. **SafetyKit Obfuscation:** Implement a middleware function. If the geographic coordinates belong to a vulnerable refugee camp or sensitive medical facility, the API must add noise to the GPS coordinates (obfuscation) before sending it to the frontend to prevent misuse.
-2. **Domain Deployment:** Package the frontend and backend to be deployed to our `.tech` domain.
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate      # macOS/Linux
+# venv\Scripts\activate       # Windows
+pip install -r requirements.txt
+```
 
----
+Copy the env file into the backend directory as well:
 
-## 🚀 YOUR FIRST TASK
-Do not write the application code yet. 
-1. Create the `docs/` folder.
-2. Generate the 6 required markdown files detailed in the Vibecoding Collaboration Protocol.
-3. Populate them with the architectural plans and steps outlined above so our human developers and their respective agents have a perfect map of the repository.
-4. Once completed, reply with "CONTEXT LAYER INITIALIZED. AWAITING COMMAND TO BEGIN PHASE 1.".
+```bash
+cp ../.env .env
+```
+
+Start the server:
+
+```bash
+uvicorn main:app --reload --port 8000
+```
+
+The API is now available at `http://localhost:8000`. Docs at `http://localhost:8000/docs`.
+
+### 3. Frontend setup
+
+Open a new terminal:
+
+```bash
+cd frontend
+npm install
+```
+
+Create the frontend env file:
+
+```bash
+cp ../.env .env.local
+```
+
+Start the dev server:
+
+```bash
+npm run dev
+```
+
+The app is now available at `http://localhost:3000`.
+
+## Project Structure
+
+```
+├── docs/
+│   ├── PLAN.md           # Full implementation plan (start here)
+│   └── REFERENCE.md      # Challenge description and datasets
+├── backend/
+│   ├── main.py           # FastAPI entry point
+│   ├── requirements.txt  # Python dependencies
+│   ├── routers/          # API route handlers
+│   │   ├── countries.py
+│   │   ├── mismatch.py
+│   │   ├── compare.py
+│   │   └── ask.py
+│   └── services/         # Data clients and business logic
+│       ├── hpc_client.py
+│       ├── hdx_client.py
+│       ├── data_loader.py
+│       ├── databricks_client.py
+│       └── mismatch_engine.py
+├── frontend/             # Next.js 14 + react-globe.gl
+│   ├── src/app/
+│   └── package.json
+└── .env.example          # Environment variable template
+```
+
+## Workstream Assignments
+
+Read `docs/PLAN.md` for full details. Quick summary:
+
+| Workstream | Focus | Start with |
+|---|---|---|
+| **A — Frontend** | Globe, UI, filters, detail drawer | Section 2 of PLAN.md |
+| **B — Backend** | FastAPI, HPC/HDX API integration | Section 3 of PLAN.md |
+| **C — Databricks** | Data pipeline, ML, vector search | Section 4 of PLAN.md |
+| **D — AI/Voice** | ElevenLabs agent, RAG pipeline | Section 5 of PLAN.md |
+
+## External APIs (no keys required)
+
+- **HPC Tools API v1**: `https://api.hpc.tools/v1/public` — humanitarian plans, funding flows, projects
+- **HDX HAPI v2**: `https://hapi.humdata.org/api/v2` — humanitarian needs, population (needs app_identifier, see PLAN.md)
