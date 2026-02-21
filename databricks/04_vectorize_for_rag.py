@@ -30,7 +30,6 @@ for _, row in mismatch.iterrows():
     people = row.get("people_in_need", 0) or 0
     funding = row.get("total_funding", 0) or 0
     per_capita = row.get("funding_per_capita", 0) or 0
-    coverage = row.get("coverage_ratio", 0) or 0
     severity = row.get("severity", 0) or 0
     mismatch_score = row.get("mismatch_score", 0) or 0
 
@@ -39,7 +38,6 @@ for _, row in mismatch.iterrows():
         f"People in need: {people:,.0f}. "
         f"Total funding received: ${funding:,.0f}. "
         f"Funding per capita: ${per_capita:.2f}. "
-        f"Coverage ratio (funding/requirements): {coverage:.1%}. "
         f"Severity score: {severity:.1f}/5. "
         f"Mismatch score: {mismatch_score:.3f} "
         f"(positive = underfunded relative to need). "

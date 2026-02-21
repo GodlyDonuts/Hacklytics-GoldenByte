@@ -26,12 +26,12 @@ APP_ID = base64.b64encode(b"CrisisTopography:team@hacklytics.org").decode()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 1. Ingest HRP Plans (2020-2025)
+# MAGIC ## 1. Ingest HRP Plans (2020-2026)
 
 # COMMAND ----------
 
 all_plans = []
-for year in range(2020, 2026):
+for year in range(2020, 2027):
     print(f"Fetching plans for {year}...")
     resp = requests.get(f"{HPC_BASE}/plan/year/{year}", timeout=30)
     if resp.ok:
@@ -63,12 +63,15 @@ print(f"Wrote {plans_sdf.count()} rows to workspace.default.plans")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 2. Ingest Funding Flows by Country (2020-2025)
+# MAGIC ## 2. Ingest Funding Flows by Country (2020-2026)
+# MAGIC
+# MAGIC The HPC FTS flow API returns funding data under `data.report1.fundingTotals.objects`
+# MAGIC when grouped by country. Each object has `name`, `id`, and `totalFunding`.
 
 # COMMAND ----------
 
 all_flows = []
-for year in range(2020, 2026):
+for year in range(2020, 2027):
     print(f"Fetching funding flows for {year}...")
     resp = requests.get(
         f"{HPC_BASE}/fts/flow",
@@ -77,12 +80,20 @@ for year in range(2020, 2026):
     )
     if resp.ok:
         data = resp.json().get("data", {})
-        report3 = data.get("report3", {})
-        rows = report3.get("rows", [])
-        for row in rows:
-            row["year"] = year
-            all_flows.append(row)
-        print(f"  -> {len(rows)} country-flow rows")
+        # Funding data is in report1.fundingTotals.objects (not report3)
+        report = data.get("report1", {})
+        funding_totals = report.get("fundingTotals", {})
+        objects = funding_totals.get("objects", [])
+        for obj in objects:
+            all_flows.append({
+                "year": year,
+                "country_name": obj.get("name", ""),
+                "country_id": str(obj.get("id", "")),
+                "totalFunding": obj.get("totalFunding", 0),
+                "type": obj.get("type", ""),
+                "direction": obj.get("direction", ""),
+            })
+        print(f"  -> {len(objects)} country-flow rows")
     else:
         print(f"  -> Failed: {resp.status_code}")
     time.sleep(0.5)
@@ -92,34 +103,11 @@ print(f"\nTotal flow rows collected: {len(all_flows)}")
 # COMMAND ----------
 
 if all_flows:
-    # Flatten nested structures if present
-    flows_records = []
-    for f in all_flows:
-        record = {
-            "year": f.get("year"),
-            "totalFunding": f.get("totalFunding", 0),
-            "totalRequirements": 0,
-            "country_name": "",
-            "country_iso3": "",
-        }
-        # Extract destination country info from directionalInfo or top-level
-        if "directionalInfo" in f:
-            for direction in f["directionalInfo"]:
-                if "country" in direction:
-                    record["country_name"] = direction["country"].get("name", "")
-                    record["country_iso3"] = direction["country"].get("iso3", "")
-        elif "name" in f:
-            record["country_name"] = f.get("name", "")
-            record["country_iso3"] = f.get("id", "")
-            record["totalFunding"] = f.get("totalFunding", 0)
-            record["totalRequirements"] = f.get("totalRequirements", 0)
-
-        flows_records.append(record)
-
-    flows_pdf = pd.DataFrame(flows_records)
+    flows_pdf = pd.DataFrame(all_flows)
     flows_sdf = spark.createDataFrame(flows_pdf)
     flows_sdf.write.format("delta").mode("overwrite").saveAsTable("workspace.default.funding_flows")
     print(f"Wrote {flows_sdf.count()} rows to workspace.default.funding_flows")
+    display(flows_sdf.limit(10))
 else:
     print("No flow data to write")
 

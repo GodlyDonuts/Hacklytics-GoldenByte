@@ -46,10 +46,10 @@ severity.orderBy(F.desc("people_in_need")).show(10, truncate=False)
 
 flows = spark.table("workspace.default.funding_flows")
 
-# Aggregate funding per country (latest year available or all years)
-funding = flows.groupBy("country_iso3", "country_name").agg(
+# Aggregate funding per country across all years
+# FTS API groups by country name (no ISO3 in flow data), so we join on name
+funding = flows.groupBy("country_name").agg(
     F.sum("totalFunding").alias("total_funding"),
-    F.sum("totalRequirements").alias("total_requirements"),
     F.count("*").alias("year_count")
 )
 
@@ -63,10 +63,11 @@ funding.orderBy(F.desc("total_funding")).show(10, truncate=False)
 
 # COMMAND ----------
 
-# Join severity with funding on country ISO3
+# Join severity with funding on country name
+# HDX uses location_name, FTS uses country_name
 country_mismatch = severity.join(
     funding,
-    severity["location_code"] == funding["country_iso3"],
+    F.lower(severity["location_name"]) == F.lower(funding["country_name"]),
     "left"
 ).select(
     severity["location_code"].alias("iso3"),
@@ -74,7 +75,6 @@ country_mismatch = severity.join(
     "people_in_need",
     "sector_count",
     F.coalesce(funding["total_funding"], F.lit(0)).alias("total_funding"),
-    F.coalesce(funding["total_requirements"], F.lit(0)).alias("total_requirements"),
 )
 
 # Compute derived metrics
@@ -82,11 +82,6 @@ country_mismatch = country_mismatch.withColumn(
     "funding_per_capita",
     F.when(F.col("people_in_need") > 0,
            F.col("total_funding") / F.col("people_in_need")
-    ).otherwise(0)
-).withColumn(
-    "coverage_ratio",
-    F.when(F.col("total_requirements") > 0,
-           F.col("total_funding") / F.col("total_requirements")
     ).otherwise(0)
 )
 
