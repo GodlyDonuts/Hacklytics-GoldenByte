@@ -193,3 +193,104 @@ export async function askQuestion(
     body: JSON.stringify({ question }),
   });
 }
+
+// -- Genie (Natural Language to SQL) --
+
+export interface GenieColumn {
+  name: string;
+  type: string;
+}
+
+export interface GenieResponse {
+  question: string;
+  sql: string | null;
+  columns: GenieColumn[];
+  rows: (string | number | null)[][];
+  description: string | null;
+  conversation_id: string | null;
+  message_id: string | null;
+}
+
+export async function queryGenie(
+  question: string
+): Promise<GenieResponse> {
+  return apiFetch("/api/genie", {
+    method: "POST",
+    body: JSON.stringify({ question }),
+  });
+}
+
+// -- Globe endpoints --
+
+export interface GlobeCrisis {
+  crisis_id: string | null;
+  crisis_name: string | null;
+  acaps_severity: number | null;
+  severity_class: string | null;
+  has_hrp: boolean;
+  appeal_type: string | null;
+  funding_state: string | null;
+  people_in_need: number | null;
+  funding_gap_usd: number | null;
+  funding_coverage_pct: number | null;
+  avg_b2b_ratio: number | null;
+  median_b2b_ratio: number | null;
+  project_count: number | null;
+  crisis_rank: number | null;
+}
+
+export interface GlobeCountry {
+  iso3: string;
+  country_name: string;
+  lat: number | null;
+  lng: number | null;
+  crises: GlobeCrisis[];
+}
+
+export interface GlobeCrisesResponse {
+  year: number;
+  month: number | null;
+  year_month: string;
+  countries: GlobeCountry[];
+}
+
+export async function getGlobeCrises(
+  year: number = 2024,
+  month?: number
+): Promise<GlobeCrisesResponse> {
+  const params = new URLSearchParams({ year: String(year) });
+  if (month !== undefined) params.set("month", String(month));
+  return apiFetch(`/api/globe/crises?${params}`);
+}
+
+export interface B2BProject {
+  project_code: string | null;
+  project_name: string | null;
+  cluster: string | null;
+  requested_funds: number | null;
+  target_beneficiaries: number | null;
+  b2b_ratio: number | null;
+  cost_per_beneficiary: number | null;
+  b2b_percentile: number | null;
+  is_outlier: boolean;
+  cluster_median_b2b: number | null;
+}
+
+export interface GlobeB2BResponse {
+  iso3: string;
+  year: number;
+  projects: B2BProject[];
+  summary: {
+    avg_b2b: number | null;
+    median_b2b: number | null;
+    total_projects: number;
+    outlier_count: number;
+  };
+}
+
+export async function getGlobeB2B(
+  iso3: string,
+  year: number = 2024
+): Promise<GlobeB2BResponse> {
+  return apiFetch(`/api/globe/b2b?iso3=${iso3}&year=${year}`);
+}
