@@ -4,7 +4,10 @@
 
 # MAGIC %md
 # MAGIC # 03 - Project-Level Anomaly Detection
-# MAGIC Uses Isolation Forest to flag projects with abnormal budget/beneficiary ratios.
+# MAGIC Uses Isolation Forest to flag projects with abnormal budgets within their cluster.
+# MAGIC
+# MAGIC The HPC API does not populate `targetBeneficiaries` in project data, so anomaly
+# MAGIC detection uses budget magnitude and per-cluster z-scores instead.
 # MAGIC
 # MAGIC **Reads:** `workspace.default.plans` (to get plan IDs), HPC API (project details)
 # MAGIC **Writes:** `workspace.default.project_anomalies`
@@ -13,6 +16,7 @@
 
 import requests
 import pandas as pd
+import numpy as np
 import time
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
@@ -23,8 +27,7 @@ HPC_BASE = "https://api.hpc.tools/v1/public"
 
 # MAGIC %md
 # MAGIC ## 1. Fetch Project Data from HPC API
-# MAGIC Each plan (HRP) contains multiple projects. We fetch project-level budget
-# MAGIC and beneficiary data for anomaly detection.
+# MAGIC Each plan (HRP) contains multiple projects. We fetch project-level budget data.
 
 # COMMAND ----------
 
@@ -46,11 +49,11 @@ for i, row in enumerate(plan_rows):
                 clusters = p.get("globalClusters", [])
                 all_projects.append({
                     "projectCode": p.get("code", ""),
-                    "projectName": p.get("name", "")[:200],
+                    "projectName": (p.get("name", "") or "")[:200],
                     "planId": plan_id,
                     "planYear": row["year"],
                     "budget": p.get("currentRequestedFunds", 0) or 0,
-                    "beneficiaries": p.get("targetBeneficiaries", 0) or 0,
+                    "origBudget": p.get("origRequestedFunds", 0) or 0,
                     "cluster": clusters[0].get("name", "Unknown") if clusters else "Unknown",
                     "countryISO3": locations[0].get("iso3", "") if locations else "",
                     "countryName": locations[0].get("name", "") if locations else "",
@@ -74,31 +77,47 @@ print(f"\nTotal projects collected: {len(all_projects)}")
 
 projects_pdf = pd.DataFrame(all_projects)
 
-# API sometimes returns strings -- coerce to numeric
+# API returns budget as strings -- coerce to numeric
 projects_pdf["budget"] = pd.to_numeric(projects_pdf["budget"], errors="coerce").fillna(0)
-projects_pdf["beneficiaries"] = pd.to_numeric(projects_pdf["beneficiaries"], errors="coerce").fillna(0)
+projects_pdf["origBudget"] = pd.to_numeric(projects_pdf["origBudget"], errors="coerce").fillna(0)
 
-# Filter to projects with valid budget and beneficiary data
-valid = projects_pdf[
-    (projects_pdf["budget"] > 0) & (projects_pdf["beneficiaries"] > 0)
-].copy()
+# Filter to projects with a budget > 0
+valid = projects_pdf[projects_pdf["budget"] > 0].copy()
 
-valid["cost_per_person"] = valid["budget"] / valid["beneficiaries"]
+# Compute budget revision ratio (how much the budget changed from original request)
+valid["budget_revision_ratio"] = np.where(
+    valid["origBudget"] > 0,
+    valid["budget"] / valid["origBudget"],
+    1.0
+)
 
-print(f"Valid projects (budget > 0, beneficiaries > 0): {len(valid)} / {len(projects_pdf)}")
-print(f"\nCost per person stats:")
-print(valid["cost_per_person"].describe())
+# Compute per-cluster z-score for budget
+cluster_stats = valid.groupby("cluster")["budget"].agg(["mean", "std"]).reset_index()
+cluster_stats.columns = ["cluster", "cluster_mean", "cluster_std"]
+valid = valid.merge(cluster_stats, on="cluster", how="left")
+
+valid["budget_zscore"] = np.where(
+    valid["cluster_std"] > 0,
+    (valid["budget"] - valid["cluster_mean"]) / valid["cluster_std"],
+    0.0
+)
+
+print(f"Valid projects (budget > 0): {len(valid)} / {len(projects_pdf)}")
+print(f"Unique clusters: {valid['cluster'].nunique()}")
+print(f"\nBudget stats:")
+print(valid["budget"].describe())
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## 3. Isolation Forest Anomaly Detection
-# MAGIC Isolation Forest works by randomly partitioning the feature space. Anomalies
-# MAGIC are points that require fewer partitions to isolate, yielding lower scores.
+# MAGIC Uses budget magnitude, budget z-score within cluster, and budget revision ratio
+# MAGIC to identify unusual projects.
 
 # COMMAND ----------
 
-features = valid[["budget", "beneficiaries", "cost_per_person"]].values
+feature_cols = ["budget", "budget_zscore", "budget_revision_ratio"]
+features = valid[feature_cols].values
 
 scaler = StandardScaler()
 features_scaled = scaler.fit_transform(features)
@@ -116,7 +135,10 @@ valid["anomaly_score"] = -model.decision_function(features_scaled)
 # Normalize anomaly_score to 0-1 range
 score_min = valid["anomaly_score"].min()
 score_max = valid["anomaly_score"].max()
-valid["anomaly_score"] = (valid["anomaly_score"] - score_min) / (score_max - score_min)
+if score_max > score_min:
+    valid["anomaly_score"] = (valid["anomaly_score"] - score_min) / (score_max - score_min)
+else:
+    valid["anomaly_score"] = 0.0
 
 anomalies = valid[valid["anomaly_label"] == -1]
 print(f"Anomalies detected: {len(anomalies)} / {len(valid)} ({len(anomalies)/len(valid)*100:.1f}%)")
@@ -128,8 +150,15 @@ print(f"Anomalies detected: {len(anomalies)} / {len(valid)} ({len(anomalies)/len
 
 # COMMAND ----------
 
-# Write all projects with their anomaly scores (not just anomalies)
-results_sdf = spark.createDataFrame(valid)
+# Drop intermediate columns before writing to Delta
+output_cols = [
+    "projectCode", "projectName", "planId", "planYear", "budget", "origBudget",
+    "cluster", "countryISO3", "countryName", "budget_revision_ratio",
+    "budget_zscore", "anomaly_label", "anomaly_score"
+]
+output_pdf = valid[output_cols]
+
+results_sdf = spark.createDataFrame(output_pdf)
 results_sdf.write.format("delta").mode("overwrite").saveAsTable("workspace.default.project_anomalies")
 print(f"Wrote {results_sdf.count()} rows to workspace.default.project_anomalies")
 
@@ -143,7 +172,7 @@ print(f"Wrote {results_sdf.count()} rows to workspace.default.project_anomalies"
 # Show the most anomalous projects
 print("Top 20 anomalous projects:")
 top_anomalies = valid.nlargest(20, "anomaly_score")[
-    ["projectCode", "countryName", "cluster", "budget", "beneficiaries",
-     "cost_per_person", "anomaly_score", "planYear"]
+    ["projectCode", "countryName", "cluster", "budget",
+     "budget_zscore", "anomaly_score", "planYear"]
 ]
 display(spark.createDataFrame(top_anomalies))

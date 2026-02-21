@@ -5,7 +5,7 @@
 # MAGIC %md
 # MAGIC # 05 - Cluster Benchmarking
 # MAGIC Groups projects by humanitarian cluster, computes percentile bands for
-# MAGIC cost-per-person, and identifies outliers within each cluster.
+# MAGIC budget, and identifies outliers within each cluster.
 # MAGIC
 # MAGIC **Reads:** `workspace.default.project_anomalies`
 # MAGIC **Writes:** `workspace.default.cluster_benchmarks`, `workspace.default.project_benchmarked`
@@ -28,7 +28,7 @@ print(f"Unique clusters: {projects.select('cluster').distinct().count()}")
 
 projects.groupBy("cluster").agg(
     F.count("*").alias("project_count"),
-    F.avg("cost_per_person").alias("avg_cost_per_person"),
+    F.avg("budget").alias("avg_budget"),
     F.sum("budget").alias("total_budget")
 ).orderBy(F.desc("project_count")).show(truncate=False)
 
@@ -41,15 +41,14 @@ projects.groupBy("cluster").agg(
 
 cluster_stats = projects.groupBy("cluster").agg(
     F.count("*").alias("project_count"),
-    F.avg("cost_per_person").alias("avg_cost"),
-    F.stddev("cost_per_person").alias("std_cost"),
-    F.min("cost_per_person").alias("min_cost"),
-    F.max("cost_per_person").alias("max_cost"),
-    F.percentile_approx("cost_per_person", 0.25).alias("p25"),
-    F.percentile_approx("cost_per_person", 0.50).alias("median"),
-    F.percentile_approx("cost_per_person", 0.75).alias("p75"),
+    F.avg("budget").alias("avg_budget"),
+    F.stddev("budget").alias("std_budget"),
+    F.min("budget").alias("min_budget"),
+    F.max("budget").alias("max_budget"),
+    F.percentile_approx("budget", 0.25).alias("p25"),
+    F.percentile_approx("budget", 0.50).alias("median"),
+    F.percentile_approx("budget", 0.75).alias("p75"),
     F.sum("budget").alias("total_budget"),
-    F.sum("beneficiaries").alias("total_beneficiaries"),
 )
 
 # Compute IQR-based outlier bounds
@@ -78,33 +77,33 @@ display(cluster_stats.orderBy(F.desc("project_count")))
 # Join projects with their cluster benchmarks
 benchmarked = projects.join(
     cluster_stats.select(
-        "cluster", "avg_cost", "std_cost", "median",
+        "cluster", "avg_budget", "std_budget", "median",
         "p25", "p75", "lower_bound", "upper_bound"
     ),
     on="cluster",
     how="left"
 )
 
-# Flag projects as outliers within their cluster
+# Flag projects as outliers within their cluster (budget outside IQR bounds)
 benchmarked = benchmarked.withColumn(
     "cluster_outlier",
     F.when(
-        (F.col("cost_per_person") < F.col("lower_bound")) |
-        (F.col("cost_per_person") > F.col("upper_bound")),
+        (F.col("budget") < F.col("lower_bound")) |
+        (F.col("budget") > F.col("upper_bound")),
         True
     ).otherwise(False)
 )
 
 # Compute z-score within cluster
 benchmarked = benchmarked.withColumn(
-    "cluster_zscore",
-    F.when(F.col("std_cost") > 0,
-        (F.col("cost_per_person") - F.col("avg_cost")) / F.col("std_cost")
+    "cluster_budget_zscore",
+    F.when(F.col("std_budget") > 0,
+        (F.col("budget") - F.col("avg_budget")) / F.col("std_budget")
     ).otherwise(0)
 )
 
 # Percentile rank within cluster
-w_cluster = Window.partitionBy("cluster").orderBy("cost_per_person")
+w_cluster = Window.partitionBy("cluster").orderBy("budget")
 benchmarked = benchmarked.withColumn(
     "cluster_percentile", F.percent_rank().over(w_cluster)
 )
@@ -123,10 +122,9 @@ outliers = benchmarked.filter(F.col("cluster_outlier") == True)
 print(f"Total cluster outliers: {outliers.count()}")
 
 display(
-    outliers.orderBy(F.desc(F.abs(F.col("cluster_zscore")))).select(
+    outliers.orderBy(F.desc(F.abs(F.col("cluster_budget_zscore")))).select(
         "projectCode", "countryName", "cluster", "budget",
-        "beneficiaries", "cost_per_person", "cluster_zscore",
-        "anomaly_score", "planYear"
+        "cluster_budget_zscore", "anomaly_score", "planYear"
     ).limit(30)
 )
 
