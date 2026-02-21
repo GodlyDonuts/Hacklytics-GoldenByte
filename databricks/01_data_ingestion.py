@@ -8,7 +8,7 @@
 # MAGIC
 # MAGIC **Tables created:**
 # MAGIC - `workspace.default.plans`
-# MAGIC - `workspace.default.funding_flows`
+# MAGIC - `workspace.default.funding`
 # MAGIC - `workspace.default.humanitarian_needs`
 # MAGIC - `workspace.default.population`
 
@@ -65,58 +65,53 @@ print(f"Wrote {plans_sdf.count()} rows to workspace.default.plans")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 2. Ingest Funding Flows by Country (2020-2026)
+# MAGIC ## 2. Ingest Funding Data from HDX HAPI
 # MAGIC
-# MAGIC The HPC FTS flow API returns per-country funding breakdowns under
-# MAGIC `data.report2.fundingTotals.objectsBreakdown`. Report2 = destination (recipient)
-# MAGIC countries. `objectsBreakdown` has 150+ entries per year vs `objects` which is
-# MAGIC just a single aggregate.
+# MAGIC Uses `/coordination-context/funding` which wraps OCHA FTS data in a clean format.
+# MAGIC Each record has `location_code` (ISO3), `requirements_usd`, `funding_usd`,
+# MAGIC and `funding_pct` -- joins directly with humanitarian needs on `location_code`.
 
 # COMMAND ----------
 
-all_flows = []
-for year in range(2020, 2027):
-    print(f"Fetching funding flows for {year}...")
+all_funding = []
+offset = 0
+
+while True:
+    print(f"Fetching funding data (offset={offset})...")
     resp = requests.get(
-        f"{HPC_BASE}/fts/flow", params={"year": year, "groupby": "country"}, timeout=30
+        f"{HDX_BASE}/coordination-context/funding",
+        params={
+            "app_identifier": APP_ID,
+            "limit": 1000,
+            "offset": offset,
+        },
+        timeout=60,
     )
-    if resp.ok:
-        data = resp.json().get("data", {})
-        # report2 = destination/recipient countries
-        # objectsBreakdown has per-country rows (objects only has 1 aggregate)
-        report = data.get("report2", {})
-        funding_totals = report.get("fundingTotals", {})
-        breakdown = funding_totals.get("objectsBreakdown", [])
-        for obj in breakdown:
-            all_flows.append(
-                {
-                    "year": year,
-                    "country_name": obj.get("name", ""),
-                    "country_id": str(obj.get("id", "")),
-                    "totalFunding": obj.get("totalFunding", 0),
-                    "singleFunding": obj.get("singleFunding", 0),
-                    "type": obj.get("type", ""),
-                }
-            )
-        print(f"  -> {len(breakdown)} country-flow rows")
-    else:
+    if not resp.ok:
         print(f"  -> Failed: {resp.status_code}")
-    time.sleep(0.5)
+        break
 
-print(f"\nTotal flow rows collected: {len(all_flows)}")
+    data = resp.json().get("data", [])
+    if not data:
+        print("  -> No more data, done.")
+        break
+
+    all_funding.extend(data)
+    print(f"  -> Got {len(data)} records (total: {len(all_funding)})")
+    offset += 1000
+    time.sleep(0.3)
+
+print(f"\nTotal funding records: {len(all_funding)}")
 
 # COMMAND ----------
 
-if all_flows:
-    flows_pdf = pd.DataFrame(all_flows)
-    flows_sdf = spark.createDataFrame(flows_pdf)
-    flows_sdf.write.format("delta").mode("overwrite").saveAsTable(
-        "workspace.default.funding_flows"
-    )
-    print(f"Wrote {flows_sdf.count()} rows to workspace.default.funding_flows")
-    display(flows_sdf.limit(10))
+if all_funding:
+    funding_pdf = pd.DataFrame(all_funding)
+    funding_sdf = spark.createDataFrame(funding_pdf)
+    funding_sdf.write.format("delta").mode("overwrite").saveAsTable("workspace.default.funding")
+    print(f"Wrote {funding_sdf.count()} rows to workspace.default.funding")
 else:
-    print("No flow data to write")
+    print("No funding data to write")
 
 # COMMAND ----------
 
@@ -217,7 +212,7 @@ else:
 
 # COMMAND ----------
 
-for table in ["plans", "funding_flows", "humanitarian_needs", "population"]:
+for table in ["plans", "funding", "humanitarian_needs", "population"]:
     try:
         count = spark.table(f"workspace.default.{table}").count()
         print(f"workspace.default.{table}: {count} rows")

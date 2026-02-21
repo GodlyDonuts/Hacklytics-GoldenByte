@@ -7,7 +7,7 @@
 # MAGIC Computes a mismatch score per country by comparing severity (people in need)
 # MAGIC against funding received. Countries with high need but low funding rank higher.
 # MAGIC
-# MAGIC **Reads:** `workspace.default.humanitarian_needs`, `workspace.default.funding_flows`
+# MAGIC **Reads:** `workspace.default.humanitarian_needs`, `workspace.default.funding`
 # MAGIC **Writes:** `workspace.default.country_mismatch`
 
 # COMMAND ----------
@@ -44,17 +44,19 @@ severity.orderBy(F.desc("people_in_need")).show(10, truncate=False)
 
 # COMMAND ----------
 
-flows = spark.table("workspace.default.funding_flows")
+funding = spark.table("workspace.default.funding")
 
-# Aggregate funding per country across all years
-# FTS API groups by country name (no ISO3 in flow data), so we join on name
-funding = flows.groupBy("country_name").agg(
-    F.sum("totalFunding").alias("total_funding"),
-    F.count("*").alias("year_count")
+# Aggregate funding per country across all appeals
+# HDX HAPI funding table has location_code (ISO3), requirements_usd, funding_usd
+funding_agg = funding.groupBy("location_code", "location_name").agg(
+    F.sum("funding_usd").alias("total_funding"),
+    F.sum("requirements_usd").alias("total_requirements"),
+    F.avg("funding_pct").alias("avg_funding_pct"),
+    F.count("*").alias("appeal_count")
 )
 
-print(f"Countries with funding data: {funding.count()}")
-funding.orderBy(F.desc("total_funding")).show(10, truncate=False)
+print(f"Countries with funding data: {funding_agg.count()}")
+funding_agg.orderBy(F.desc("total_funding")).show(10, truncate=False)
 
 # COMMAND ----------
 
@@ -63,18 +65,19 @@ funding.orderBy(F.desc("total_funding")).show(10, truncate=False)
 
 # COMMAND ----------
 
-# Join severity with funding on country name
-# HDX uses location_name, FTS uses country_name
+# Join severity with funding on ISO3 location_code
 country_mismatch = severity.join(
-    funding,
-    F.lower(severity["location_name"]) == F.lower(funding["country_name"]),
-    "left"
+    funding_agg,
+    on="location_code",
+    how="left"
 ).select(
     severity["location_code"].alias("iso3"),
     severity["location_name"].alias("country"),
     "people_in_need",
     "sector_count",
-    F.coalesce(funding["total_funding"], F.lit(0)).alias("total_funding"),
+    F.coalesce(funding_agg["total_funding"], F.lit(0)).alias("total_funding"),
+    F.coalesce(funding_agg["total_requirements"], F.lit(0)).alias("total_requirements"),
+    F.coalesce(funding_agg["avg_funding_pct"], F.lit(0)).alias("avg_funding_pct"),
 )
 
 # Compute derived metrics
@@ -82,6 +85,11 @@ country_mismatch = country_mismatch.withColumn(
     "funding_per_capita",
     F.when(F.col("people_in_need") > 0,
            F.col("total_funding") / F.col("people_in_need")
+    ).otherwise(0)
+).withColumn(
+    "coverage_ratio",
+    F.when(F.col("total_requirements") > 0,
+           F.col("total_funding") / F.col("total_requirements")
     ).otherwise(0)
 )
 
@@ -148,6 +156,6 @@ print(f"Wrote {country_mismatch.count()} rows to workspace.default.country_misma
 # Show countries with highest mismatch (most underfunded relative to need)
 country_mismatch.orderBy(F.desc("mismatch_score")).select(
     "iso3", "country", "people_in_need", "total_funding",
-    "funding_per_capita", "severity", "mismatch_score",
+    "funding_per_capita", "coverage_ratio", "severity", "mismatch_score",
     "severity_rank", "funding_rank"
 ).show(20, truncate=False)
