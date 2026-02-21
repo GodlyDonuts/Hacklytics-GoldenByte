@@ -1,0 +1,426 @@
+# Databricks notebook source
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC # 02 - Project Embeddings (Refactored)
+# MAGIC Builds `workspace.default.project_embeddings` — the table that drives
+# MAGIC globe B2B drill-down, benchmarking, and RAG vector search.
+# MAGIC
+# MAGIC **Inputs:**
+# MAGIC - HPC Plans API (to get plan IDs for 2022-2026)
+# MAGIC - HPC Projects API (per-plan project details with budgets and beneficiaries)
+# MAGIC
+# MAGIC **Output:** `workspace.default.project_embeddings`
+# MAGIC — one row per HRP project with B2B ratios, percentile ranks, outlier flags, and text blobs.
+# MAGIC
+# MAGIC Also creates Vector Search index `workspace.default.project_embeddings_index` on text_blob.
+
+# COMMAND ----------
+
+# MAGIC %pip install databricks-vectorsearch
+
+# COMMAND ----------
+
+dbutils.library.restartPython()
+
+# COMMAND ----------
+
+import requests
+import pandas as pd
+import numpy as np
+import re
+import time
+import os
+
+# Suppress VectorSearchClient notices
+os.environ["DATABRICKS_VECTOR_SEARCH_DISABLE_NOTICE"] = "true"
+
+HPC_BASE = "https://api.hpc.tools/v1/public"
+YEARS = range(2022, 2027)
+
+# Vector search resource names
+VS_ENDPOINT = "crisis-rag-endpoint"
+VS_INDEX = "workspace.default.project_embeddings_index"
+VS_SOURCE_TABLE = "workspace.default.project_embeddings"
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 1: Pull All Plans (2022-2026)
+
+# COMMAND ----------
+
+all_plans = []
+for y in YEARS:
+    print(f"Fetching plans for {y}...")
+    try:
+        resp = requests.get(f"{HPC_BASE}/plan/year/{y}", timeout=30)
+        if resp.ok:
+            for p in resp.json().get("data", []):
+                locations = p.get("locations", [])
+                iso3 = ""
+                country = ""
+                if locations:
+                    loc = locations[0] if isinstance(locations[0], dict) else {}
+                    iso3 = loc.get("iso3", "") or ""
+                    country = loc.get("name", "") or ""
+
+                if not iso3:
+                    name = p.get("planVersion", {}).get("name", "") or ""
+                    match = re.match(r"^(.+?)\s*\d{4}", name)
+                    if match:
+                        country = match.group(1).strip().rstrip(" -:")
+
+                all_plans.append({
+                    "plan_id": p["id"],
+                    "year": y,
+                    "iso3": iso3.upper(),
+                    "country_name": country,
+                })
+            print(f"  -> {len([x for x in all_plans if x['year'] == y])} plans")
+    except Exception as e:
+        print(f"  -> Error: {e}")
+    time.sleep(0.5)
+
+plans_df = pd.DataFrame(all_plans)
+print(f"\nTotal plans: {len(plans_df)}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 2: Pull Project-Level Data for Every Plan
+
+# COMMAND ----------
+
+all_projects = []
+plan_rows = plans_df.to_dict("records")
+
+for i, plan in enumerate(plan_rows):
+    pid = plan["plan_id"]
+    if (i + 1) % 20 == 0 or i == 0:
+        print(f"  [{i+1}/{len(plan_rows)}] Fetching projects for plan {pid}...")
+
+    try:
+        resp = requests.get(f"{HPC_BASE}/project/plan/{pid}", timeout=30)
+        if resp.ok:
+            for p in resp.json().get("data", []):
+                code = p.get("code", "") or ""
+                # Extract ISO3 from project code: codes are like SDN-24/H/001
+                iso3_from_code = code[:3].upper() if len(code) >= 3 and code[:3].isalpha() else ""
+                # Some codes start with a letter prefix before ISO3
+                if not iso3_from_code and len(code) >= 4:
+                    iso3_from_code = code[1:4].upper() if code[1:4].isalpha() else ""
+
+                iso3 = iso3_from_code or plan["iso3"]
+
+                clusters = p.get("globalClusters", [])
+                sectors = p.get("sectors", [])
+
+                all_projects.append({
+                    "project_code": code,
+                    "project_name": (p.get("name", "") or "")[:300],
+                    "plan_id": pid,
+                    "iso3": iso3,
+                    "country_name": plan["country_name"],
+                    "year": plan["year"],
+                    "cluster": clusters[0].get("name", "Unknown") if clusters else "Unknown",
+                    "sector": sectors[0].get("name", "") if sectors else "",
+                    "requested_funds": float(p.get("currentRequestedFunds", 0) or 0),
+                    "target_beneficiaries": float(p.get("targetBeneficiaries", 0) or 0),
+                    "description": (p.get("description", "") or "")[:500],
+                    "objectives": (p.get("objectives", "") or "")[:500],
+                })
+    except Exception:
+        pass
+    time.sleep(0.2)
+
+print(f"Total projects collected: {len(all_projects)}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 3: Filter to Valid Projects (budget > 0 AND beneficiaries > 0)
+
+# COMMAND ----------
+
+projects_df = pd.DataFrame(all_projects)
+
+# Coerce to numeric
+projects_df["requested_funds"] = pd.to_numeric(projects_df["requested_funds"], errors="coerce").fillna(0)
+projects_df["target_beneficiaries"] = pd.to_numeric(projects_df["target_beneficiaries"], errors="coerce").fillna(0)
+
+# Filter to projects with both budget and beneficiaries
+valid = projects_df[
+    (projects_df["requested_funds"] > 0) &
+    (projects_df["target_beneficiaries"] > 0)
+].copy()
+
+print(f"Valid projects (funds > 0 AND beneficiaries > 0): {len(valid)} / {len(projects_df)}")
+print(f"Projects with budget but no beneficiaries: "
+      f"{len(projects_df[(projects_df['requested_funds'] > 0) & (projects_df['target_beneficiaries'] == 0)])}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 4: Compute B2B Ratios and Cost Per Beneficiary
+
+# COMMAND ----------
+
+valid["b2b_ratio"] = valid["target_beneficiaries"] / valid["requested_funds"]
+valid["cost_per_beneficiary"] = valid["requested_funds"] / valid["target_beneficiaries"]
+
+print(f"B2B ratio stats:")
+print(valid["b2b_ratio"].describe())
+print(f"\nCost per beneficiary stats:")
+print(valid["cost_per_beneficiary"].describe())
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 5: Per-Cluster Percentiles and Outlier Flags
+
+# COMMAND ----------
+
+# Compute per-cluster B2B percentile and median
+cluster_medians = valid.groupby("cluster")["b2b_ratio"].median().reset_index()
+cluster_medians.columns = ["cluster", "cluster_median_b2b"]
+
+valid = valid.merge(cluster_medians, on="cluster", how="left")
+
+# Percentile rank within cluster
+valid["b2b_percentile"] = valid.groupby("cluster")["b2b_ratio"].rank(pct=True)
+
+# Outlier: below 10th or above 90th percentile within cluster
+valid["is_outlier"] = (valid["b2b_percentile"] < 0.10) | (valid["b2b_percentile"] > 0.90)
+
+print(f"Outlier projects: {valid['is_outlier'].sum()} / {len(valid)} "
+      f"({valid['is_outlier'].mean()*100:.1f}%)")
+print(f"Unique clusters: {valid['cluster'].nunique()}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 6: Build Text Blobs for Embedding
+
+# COMMAND ----------
+
+# Build a rich text representation for each project (used by Vector Search)
+valid["text_blob"] = (
+    valid["project_name"].fillna("") + " | " +
+    valid["cluster"].fillna("") + " | " +
+    valid["sector"].fillna("") + " | " +
+    valid["description"].fillna("") + " | " +
+    valid["country_name"].fillna("") + " | " +
+    valid["year"].astype(str) + " | " +
+    "Budget: $" + valid["requested_funds"].apply(lambda x: f"{x:,.0f}") + " | " +
+    "Beneficiaries: " + valid["target_beneficiaries"].apply(lambda x: f"{x:,.0f}") + " | " +
+    "B2B ratio: " + valid["b2b_ratio"].apply(lambda x: f"{x:.4f}") + " | " +
+    "Cost per person: $" + valid["cost_per_beneficiary"].apply(lambda x: f"{x:.2f}")
+)
+
+# Truncate to avoid excessively long text
+valid["text_blob"] = valid["text_blob"].str[:2000]
+
+print(f"Sample text_blob:\n{valid.iloc[0]['text_blob'][:300]}...")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 7: Create Primary Key and Write Delta Table
+
+# COMMAND ----------
+
+# Create unique project_id
+valid["project_id"] = valid["project_code"] + "_" + valid["year"].astype(str)
+
+# De-duplicate on project_id (same project code can appear in multiple plans)
+valid = valid.drop_duplicates(subset="project_id", keep="first")
+
+# Select output columns
+output_columns = [
+    "project_id", "project_code", "project_name",
+    "iso3", "country_name", "year",
+    "cluster", "sector",
+    "requested_funds", "target_beneficiaries",
+    "b2b_ratio", "cost_per_beneficiary",
+    "b2b_percentile", "is_outlier", "cluster_median_b2b",
+    "description", "objectives", "text_blob",
+]
+
+output_df = valid[[c for c in output_columns if c in valid.columns]]
+
+# Write to Delta
+embeddings_sdf = spark.createDataFrame(output_df)
+embeddings_sdf.write.format("delta").mode("overwrite").saveAsTable(VS_SOURCE_TABLE)
+
+row_count = embeddings_sdf.count()
+print(f"Wrote {row_count} rows to {VS_SOURCE_TABLE}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 8: Enable Change Data Feed (required for Vector Search Delta Sync)
+
+# COMMAND ----------
+
+spark.sql(f"ALTER TABLE {VS_SOURCE_TABLE} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
+print(f"Enabled Change Data Feed on {VS_SOURCE_TABLE}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 9: Create Vector Search Index
+# MAGIC Idempotent: tears down existing index/endpoint before recreating.
+# MAGIC Uses Databricks managed embeddings (databricks-bge-large-en) — no GPU needed.
+
+# COMMAND ----------
+
+from databricks.vector_search.client import VectorSearchClient
+import time as _time
+
+vsc = VectorSearchClient()
+
+# --- Teardown existing resources ---
+# Delete existing index first (index depends on endpoint)
+try:
+    vsc.delete_index(VS_ENDPOINT, VS_INDEX)
+    print(f"Deleted existing index: {VS_INDEX}")
+    _time.sleep(5)
+except Exception as e:
+    if "not found" not in str(e).lower() and "does not exist" not in str(e).lower():
+        print(f"Index delete note: {e}")
+
+# Create endpoint (skip if exists)
+try:
+    vsc.create_endpoint(name=VS_ENDPOINT)
+    print(f"Created endpoint: {VS_ENDPOINT}")
+except Exception as e:
+    if "already exists" in str(e).lower():
+        print(f"Endpoint {VS_ENDPOINT} already exists, reusing.")
+    else:
+        print(f"Endpoint error: {e}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Wait for endpoint to come online
+
+# COMMAND ----------
+
+# Poll endpoint status until ONLINE
+for attempt in range(30):
+    try:
+        ep = vsc.get_endpoint(VS_ENDPOINT)
+        state = ep.get("endpoint_status", {}).get("state", "UNKNOWN")
+        print(f"  Endpoint state: {state} (attempt {attempt+1}/30)")
+        if state == "ONLINE":
+            break
+    except Exception as e:
+        print(f"  Endpoint check error: {e}")
+    _time.sleep(20)
+else:
+    print("WARNING: Endpoint did not reach ONLINE state within 10 minutes")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Create Delta Sync index
+
+# COMMAND ----------
+
+# Columns to sync to the vector index (all the metadata the backend needs)
+SYNC_COLUMNS = [
+    "project_id", "project_code", "project_name",
+    "iso3", "country_name", "cluster",
+    "b2b_ratio", "cost_per_beneficiary", "text_blob",
+]
+
+try:
+    vsc.create_delta_sync_index(
+        endpoint_name=VS_ENDPOINT,
+        index_name=VS_INDEX,
+        source_table_name=VS_SOURCE_TABLE,
+        pipeline_type="TRIGGERED",
+        primary_key="project_id",
+        embedding_source_column="text_blob",
+        embedding_model_endpoint_name="databricks-bge-large-en",
+        columns_to_sync=SYNC_COLUMNS,
+    )
+    print(f"Created vector search index: {VS_INDEX}")
+except Exception as e:
+    if "already exists" in str(e).lower():
+        print(f"Index {VS_INDEX} already exists.")
+    else:
+        print(f"Index creation error: {e}")
+        print("Try: databricks-gte-large-en or system.ai.databricks-bge-large-en")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Wait for index to sync
+
+# COMMAND ----------
+
+# Poll index status
+for attempt in range(30):
+    try:
+        idx = vsc.get_index(VS_ENDPOINT, VS_INDEX)
+        status = idx.describe()
+        state = status.get("status", {}).get("detailed_state", "UNKNOWN")
+        ready = status.get("status", {}).get("ready", False)
+        print(f"  Index state: {state}, ready: {ready} (attempt {attempt+1}/30)")
+        if ready:
+            print("Index is ready.")
+            break
+    except Exception as e:
+        print(f"  Index check error: {e}")
+    _time.sleep(20)
+else:
+    print("WARNING: Index did not reach ready state within 10 minutes")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 10: Test Vector Search
+
+# COMMAND ----------
+
+try:
+    index = vsc.get_index(VS_ENDPOINT, VS_INDEX)
+    results = index.similarity_search(
+        query_text="Health projects in East Africa with high cost per beneficiary",
+        columns=["project_id", "project_code", "iso3", "cluster", "b2b_ratio", "cost_per_beneficiary"],
+        num_results=5,
+    )
+    print("Vector search test results:")
+    for r in results.get("result", {}).get("data_array", []):
+        print(f"  {r}")
+except Exception as e:
+    print(f"Vector search test error (index may still be syncing): {e}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Verification
+
+# COMMAND ----------
+
+pe = spark.table(VS_SOURCE_TABLE).toPandas()
+print(f"Total rows: {len(pe)}")
+print(f"Countries: {pe['iso3'].nunique()}")
+print(f"Year range: {pe['year'].min()} - {pe['year'].max()}")
+print(f"Clusters: {pe['cluster'].nunique()}")
+print(f"\nOutlier distribution:")
+print(pe["is_outlier"].value_counts())
+print(f"\nB2B ratio stats:")
+print(pe["b2b_ratio"].describe())
+print(f"\nTop 10 highest cost per beneficiary:")
+display(
+    spark.createDataFrame(
+        pe.nlargest(10, "cost_per_beneficiary")[
+            ["project_code", "iso3", "cluster", "requested_funds",
+             "target_beneficiaries", "cost_per_beneficiary", "b2b_ratio", "is_outlier"]
+        ]
+    )
+)
