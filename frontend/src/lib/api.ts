@@ -126,21 +126,6 @@ export interface GlobeCrisesResponse {
 
 // -- API Functions --
 
-export async function getGlobeCrises(
-  year: number = 2024,
-  month?: number
-): Promise<GlobeCrisesResponse> {
-  const query = month ? `?year=${year}&month=${month}` : `?year=${year}`;
-  return apiFetch(`/api/globe/crises${query}`);
-}
-
-export async function getGlobeB2B(
-  iso3: string,
-  year: number = 2024
-): Promise<any> {
-  return apiFetch(`/api/globe/b2b?iso3=${iso3}&year=${year}`);
-}
-
 export async function getHealth(): Promise<HealthResponse> {
   return apiFetch("/api/health");
 }
@@ -220,39 +205,7 @@ export async function queryGenie(
   });
 }
 
-// -- Globe endpoints --
-
-export interface GlobeCrisis {
-  crisis_id: string | null;
-  crisis_name: string | null;
-  acaps_severity: number | null;
-  severity_class: string | null;
-  has_hrp: boolean;
-  appeal_type: string | null;
-  funding_state: string | null;
-  people_in_need: number | null;
-  funding_gap_usd: number | null;
-  funding_coverage_pct: number | null;
-  avg_b2b_ratio: number | null;
-  median_b2b_ratio: number | null;
-  project_count: number | null;
-  crisis_rank: number | null;
-}
-
-export interface GlobeCountry {
-  iso3: string;
-  country_name: string;
-  lat: number | null;
-  lng: number | null;
-  crises: GlobeCrisis[];
-}
-
-export interface GlobeCrisesResponse {
-  year: number;
-  month: number | null;
-  year_month: string;
-  countries: GlobeCountry[];
-}
+// -- Globe endpoint functions --
 
 export async function getGlobeCrises(
   year: number = 2024,

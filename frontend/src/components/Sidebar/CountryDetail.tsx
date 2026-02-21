@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import {
     BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from "recharts";
-import { getGlobeCrises, getGlobeB2B, type GlobeCrisis, type B2BProject } from "@/lib/api";
+import { getGlobeCrises, getGlobeB2B, type Crisis, type B2BProject } from "@/lib/api";
 
 interface CountryDetailProps {
     countryCode: string;
@@ -21,7 +21,7 @@ function formatCompact(v: number | null): string {
 }
 
 export default function CountryDetail({ countryCode, countryName, year = 2024 }: CountryDetailProps) {
-    const [crises, setCrises] = useState<GlobeCrisis[]>([]);
+    const [crises, setCrises] = useState<Crisis[]>([]);
     const [projects, setProjects] = useState<B2BProject[]>([]);
     const [loading, setLoading] = useState(true);
 
