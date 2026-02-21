@@ -7,6 +7,7 @@ export interface GlobeState {
   filters: { year: number; cluster: string | null };
   viewMode: 'severity' | 'funding-gap' | 'anomalies';
   layersVisible: { choropleth: boolean; heatmap: boolean; points: boolean };
+  flyToCoordinates: { lat: number; lng: number; altitude?: number } | null;
 }
 
 type GlobeContextValue = GlobeState & {
@@ -14,6 +15,7 @@ type GlobeContextValue = GlobeState & {
   setFilters: React.Dispatch<React.SetStateAction<GlobeState['filters']>>;
   setViewMode: (mode: GlobeState['viewMode']) => void;
   setLayersVisible: React.Dispatch<React.SetStateAction<GlobeState['layersVisible']>>;
+  setFlyToCoordinates: React.Dispatch<React.SetStateAction<GlobeState['flyToCoordinates']>>;
 };
 
 const defaultState: GlobeState = {
@@ -21,6 +23,7 @@ const defaultState: GlobeState = {
   filters: { year: new Date().getFullYear(), cluster: null },
   viewMode: 'severity',
   layersVisible: { choropleth: true, heatmap: true, points: true },
+  flyToCoordinates: null,
 };
 
 const GlobeContext = createContext<GlobeContextValue | null>(null);
@@ -30,16 +33,19 @@ export function GlobeProvider({ children }: { children: ReactNode }) {
   const [filters, setFilters] = useState<GlobeState['filters']>(defaultState.filters);
   const [viewMode, setViewMode] = useState<GlobeState['viewMode']>(defaultState.viewMode);
   const [layersVisible, setLayersVisible] = useState<GlobeState['layersVisible']>(defaultState.layersVisible);
+  const [flyToCoordinates, setFlyToCoordinates] = useState<GlobeState['flyToCoordinates']>(defaultState.flyToCoordinates);
 
   const value: GlobeContextValue = {
     selectedCountry,
     filters,
     viewMode,
     layersVisible,
+    flyToCoordinates,
     setSelectedCountry,
     setFilters,
     setViewMode,
     setLayersVisible,
+    setFlyToCoordinates,
   };
 
   return <GlobeContext.Provider value={value}>{children}</GlobeContext.Provider>;

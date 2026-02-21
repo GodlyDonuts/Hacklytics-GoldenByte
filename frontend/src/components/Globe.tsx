@@ -1,16 +1,17 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useRef, useEffect, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, MutableRefObject } from 'react';
+import type { GlobeMethods } from 'react-globe.gl';
 
 const GlobeGL = dynamic(() => import('react-globe.gl'), { ssr: false });
 
 // Re-export for use in app; implement choropleth, heatmap, and points layers per PLAN.md §2.2
 export default function Globe() {
-  const globeRef = useRef<unknown>(null);
+  const globeRef = useRef<any>(null);
   const [hoveredCountry, setHoveredCountry] = useState<unknown>(null);
   // TODO: countriesGeo, fundingGapPoints, anomalyProjects from API + GeoJSON
-  const handleCountryClick = useCallback(() => {}, []);
+  const handleCountryClick = useCallback(() => { }, []);
 
   return (
     <GlobeGL

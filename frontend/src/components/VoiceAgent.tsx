@@ -2,12 +2,14 @@
 
 import { useConversation } from "@elevenlabs/react";
 import { useCallback, useState, useEffect } from "react";
+import { useGlobeContext } from "@/context/GlobeContext";
 
 const AGENT_ID = process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID || "agent_1201khzd23t9fsaramppkhnftan0";
 
 export function VoiceAgent() {
     const [isSpacePressed, setIsSpacePressed] = useState(false);
     const [hasStarted, setHasStarted] = useState(false);
+    const { setFlyToCoordinates } = useGlobeContext();
 
     // We pass micMuted dynamic state directly to the hook
     const conversation = useConversation({
@@ -20,6 +22,17 @@ export function VoiceAgent() {
         },
         onError: (error) => console.error("VoiceAgent error:", error),
         micMuted: !isSpacePressed,
+        clientTools: {
+            show_location_on_globe: (parameters: { lat: number; lng: number }) => {
+                console.log("AI called show_location_on_globe:", parameters);
+                setFlyToCoordinates({
+                    lat: parameters.lat,
+                    lng: parameters.lng,
+                    altitude: 1.5
+                });
+                return "Successfully moved the globe.";
+            }
+        }
     });
 
     const startVoiceSession = useCallback(async () => {
