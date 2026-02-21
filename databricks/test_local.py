@@ -99,16 +99,14 @@ def make_needs_agg() -> pd.DataFrame:
 def make_b2b_agg() -> pd.DataFrame:
     """Simulate aggregated B2B data per country-year."""
     return pd.DataFrame([
-        {"iso3": "SDN", "year": 2024, "avg_b2b_ratio": 0.0042,
-         "median_b2b_ratio": 0.0038, "project_count": 156},
-        {"iso3": "YEM", "year": 2024, "avg_b2b_ratio": 0.0051,
-         "median_b2b_ratio": 0.0045, "project_count": 120},
-        # Ukraine: high B2B (efficient)
-        {"iso3": "UKR", "year": 2024, "avg_b2b_ratio": 0.0120,
-         "median_b2b_ratio": 0.0100, "project_count": 200},
-        # Ethiopia: very low B2B (inefficient) -- below global 25th percentile
-        {"iso3": "ETH", "year": 2024, "avg_b2b_ratio": 0.0010,
-         "median_b2b_ratio": 0.0008, "project_count": 80},
+        {"iso3": "SDN", "year": 2024, "target_beneficiaries": 3_528_000,
+         "b2b_ratio": 0.0042, "project_count": 156},
+        {"iso3": "YEM", "year": 2024, "target_beneficiaries": 8_772_000,
+         "b2b_ratio": 0.0051, "project_count": 120},
+        {"iso3": "UKR", "year": 2024, "target_beneficiaries": 9_800_000,
+         "b2b_ratio": 0.0120, "project_count": 200},
+        {"iso3": "ETH", "year": 2024, "target_beneficiaries": 1_650_000,
+         "b2b_ratio": 0.0010, "project_count": 80},
     ])
 
 
@@ -148,11 +146,15 @@ def test_crisis_summary():
         on=["iso3", "year"], how="left",
     )
     result = result.merge(
-        b2b_agg[["iso3", "year", "avg_b2b_ratio", "median_b2b_ratio", "project_count"]],
+        b2b_agg[["iso3", "year", "target_beneficiaries", "b2b_ratio", "project_count"]],
         on=["iso3", "year"], how="left",
     )
     result["has_hrp"] = result["has_hrp"].fillna(False)
     result["project_count"] = result["project_count"].fillna(0).astype(int)
+    for col in ["funding_usd", "requirements_usd", "funding_gap_usd",
+                "funding_coverage_pct", "target_beneficiaries", "b2b_ratio"]:
+        if col in result.columns:
+            result[col] = result[col].fillna(0)
 
     check("Join preserves all ACAPS rows", len(result) == len(acaps_df))
     check("BFA has no HRP", not result[result["iso3"] == "BFA"].iloc[0]["has_hrp"])
@@ -160,7 +162,7 @@ def test_crisis_summary():
 
     # Funding state classification
     # Global B2B 25th percentile from mock data
-    all_medians = b2b_agg["median_b2b_ratio"].dropna()
+    all_medians = b2b_agg["b2b_ratio"].dropna()
     global_b2b_p25 = all_medians.quantile(0.25) if len(all_medians) > 0 else 0
 
     def classify_funding_state(row):
@@ -169,12 +171,37 @@ def test_crisis_summary():
         coverage = row.get("funding_coverage_pct")
         if pd.isna(coverage) or coverage < 0.50:
             return "UNDERFUNDED"
-        median_b2b = row.get("median_b2b_ratio")
+        median_b2b = row.get("b2b_ratio")
         if pd.notna(median_b2b) and global_b2b_p25 > 0 and median_b2b < global_b2b_p25:
             return "INEFFICIENT"
         return "ADEQUATE"
 
     result["funding_state"] = result.apply(classify_funding_state, axis=1)
+
+    # Coverage ratio and oversight score
+    result["coverage_ratio"] = np.where(
+        result["people_in_need"] > 0,
+        (result["target_beneficiaries"] / result["people_in_need"]).clip(0, 1),
+        0.0,
+    )
+    result["oversight_score"] = result["acaps_severity"] * (1 - result["coverage_ratio"])
+
+    # Validate coverage_ratio bounds
+    check("coverage_ratio in [0, 1]",
+          (result["coverage_ratio"] >= 0).all() and (result["coverage_ratio"] <= 1).all(),
+          f"min={result['coverage_ratio'].min()}, max={result['coverage_ratio'].max()}")
+
+    # BFA has NO_HRP -> coverage_ratio=0 -> oversight_score = raw severity
+    bfa = result[result["iso3"] == "BFA"].iloc[0]
+    check("BFA oversight_score equals raw severity",
+          abs(bfa["oversight_score"] - bfa["acaps_severity"]) < 0.001,
+          f"oversight={bfa['oversight_score']}, severity={bfa['acaps_severity']}")
+
+    # UKR is well-funded with targeted beneficiaries -> oversight < severity
+    ukr = result[result["iso3"] == "UKR"].iloc[0]
+    check("UKR oversight_score less than severity",
+          ukr["oversight_score"] < ukr["acaps_severity"],
+          f"oversight={ukr['oversight_score']}, severity={ukr['acaps_severity']}")
 
     # Validate classifications
     bfa_state = result[result["iso3"] == "BFA"].iloc[0]["funding_state"]
@@ -227,9 +254,10 @@ def test_crisis_summary():
         "iso3", "country_name", "lat", "lng", "year", "month", "year_month",
         "crisis_id", "crisis_name", "acaps_severity", "severity_class",
         "has_hrp", "appeal_type", "appeal_code", "funding_state",
-        "people_in_need", "requirements_usd", "funding_usd",
+        "people_in_need", "target_beneficiaries", "requirements_usd", "funding_usd",
         "funding_gap_usd", "funding_coverage_pct",
-        "avg_b2b_ratio", "median_b2b_ratio", "project_count", "crisis_rank",
+        "coverage_ratio", "oversight_score",
+        "b2b_ratio", "project_count", "crisis_rank",
     ]
     for col in expected_cols:
         check(f"Column '{col}' exists", col in result.columns, f"missing from {list(result.columns)}")
@@ -264,6 +292,7 @@ def test_project_embeddings():
         iso3, cname = countries[i % len(countries)]
         cluster = clusters[i % len(clusters)]
         budget = np.random.lognormal(mean=14, sigma=1.5)  # ~$1M typical
+        orig_budget = budget * np.random.uniform(0.7, 1.3)  # original may differ
         beneficiaries = budget * np.random.uniform(0.001, 0.1)
         projects.append({
             "project_code": f"{iso3}-24/{cluster[0]}/{i:03d}",
@@ -274,6 +303,7 @@ def test_project_embeddings():
             "cluster": cluster,
             "sector": cluster,
             "requested_funds": budget,
+            "orig_requested_funds": orig_budget,
             "target_beneficiaries": beneficiaries,
             "description": f"Emergency {cluster.lower()} support",
             "objectives": f"Provide {cluster.lower()} services",
@@ -297,6 +327,26 @@ def test_project_embeddings():
     check("Cost per beneficiary is positive", (valid["cost_per_beneficiary"] > 0).all())
     check("B2B * CPB = 1", np.allclose(valid["b2b_ratio"] * valid["cost_per_beneficiary"], 1.0))
 
+    # Budget revision ratio
+    valid["budget_revision_ratio"] = np.where(
+        valid["orig_requested_funds"] > 0,
+        valid["requested_funds"] / valid["orig_requested_funds"],
+        1.0,
+    )
+    check("budget_revision_ratio is positive", (valid["budget_revision_ratio"] > 0).all())
+
+    # Budget z-score within cluster
+    cluster_stats = valid.groupby("cluster")["requested_funds"].agg(["mean", "std"]).reset_index()
+    cluster_stats.columns = ["cluster", "cluster_mean_budget", "cluster_std_budget"]
+    valid = valid.merge(cluster_stats, on="cluster", how="left")
+    valid["budget_zscore"] = np.where(
+        valid["cluster_std_budget"] > 0,
+        (valid["requested_funds"] - valid["cluster_mean_budget"]) / valid["cluster_std_budget"],
+        0.0,
+    )
+    valid = valid.drop(columns=["cluster_mean_budget", "cluster_std_budget"])
+    check("budget_zscore computed", "budget_zscore" in valid.columns)
+
     # Per-cluster percentiles
     cluster_medians = valid.groupby("cluster")["b2b_ratio"].median().reset_index()
     cluster_medians.columns = ["cluster", "cluster_median_b2b"]
@@ -310,6 +360,26 @@ def test_project_embeddings():
           0.10 <= valid["is_outlier"].mean() <= 0.30,
           f"got {valid['is_outlier'].mean():.1%}")
     check("cluster_median_b2b populated", valid["cluster_median_b2b"].isna().sum() == 0)
+
+    # IsolationForest anomaly detection
+    from sklearn.ensemble import IsolationForest
+    anomaly_features = ["b2b_ratio", "cost_per_beneficiary", "budget_zscore", "budget_revision_ratio"]
+    X = valid[anomaly_features].copy()
+    X = X.fillna(0).replace([np.inf, -np.inf], 0)
+
+    iso_forest = IsolationForest(n_estimators=200, contamination=0.10, random_state=42)
+    iso_forest.fit(X)
+    raw_scores = iso_forest.decision_function(X)
+    valid["anomaly_score"] = 1 - (raw_scores - raw_scores.min()) / (raw_scores.max() - raw_scores.min() + 1e-10)
+    iso_labels = iso_forest.predict(X)
+    valid["is_outlier"] = valid["is_outlier"] | (iso_labels == -1)
+
+    check("anomaly_score in [0, 1]",
+          (valid["anomaly_score"] >= 0).all() and (valid["anomaly_score"] <= 1).all(),
+          f"min={valid['anomaly_score'].min():.3f}, max={valid['anomaly_score'].max():.3f}")
+    check("IsolationForest flags ~10% anomalies",
+          0.05 <= (iso_labels == -1).mean() <= 0.20,
+          f"got {(iso_labels == -1).mean():.1%}")
 
     # Text blob
     valid["text_blob"] = (
@@ -332,8 +402,9 @@ def test_project_embeddings():
         "project_id", "project_code", "project_name",
         "iso3", "country_name", "year",
         "cluster", "sector",
-        "requested_funds", "target_beneficiaries",
+        "requested_funds", "orig_requested_funds", "target_beneficiaries",
         "b2b_ratio", "cost_per_beneficiary",
+        "budget_zscore", "budget_revision_ratio", "anomaly_score",
         "b2b_percentile", "is_outlier", "cluster_median_b2b",
         "description", "text_blob",
     ]
@@ -401,7 +472,7 @@ def test_edge_cases():
                                  "requirements_usd", "funding_usd", "funding_gap_usd",
                                  "funding_coverage_pct"])
     needs = pd.DataFrame(columns=["iso3", "year", "people_in_need"])
-    b2b = pd.DataFrame(columns=["iso3", "year", "avg_b2b_ratio", "median_b2b_ratio", "project_count"])
+    b2b = pd.DataFrame(columns=["iso3", "year", "b2b_ratio", "project_count"])
 
     result = acaps.merge(hrp, on=["iso3", "year"], how="left")
     result = result.merge(needs, on=["iso3", "year"], how="left")

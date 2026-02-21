@@ -59,8 +59,11 @@ async def get_globe_crises(
             "crisis_name": r.get("crisis_name"),
             "acaps_severity": _float(r.get("acaps_severity")),
             "people_in_need": _int(r.get("people_in_need")),
+            "target_beneficiaries": _int(r.get("target_beneficiaries")),
             "funding_usd": _float(r.get("funding_usd")),
-            "b2b_ratio": _float(r.get("b2b_ratio"))
+            "coverage_ratio": _float(r.get("coverage_ratio")),
+            "oversight_score": _float(r.get("oversight_score")),
+            "b2b_ratio": _float(r.get("b2b_ratio")),
         }
         by_country[iso3].append(crisis)
 
@@ -112,6 +115,7 @@ async def get_globe_b2b(
             "b2b_percentile": _float(r.get("b2b_percentile")),
             "is_outlier": _bool(r.get("is_outlier")),
             "cluster_median_b2b": _float(r.get("cluster_median_b2b")),
+            "anomaly_score": _float(r.get("anomaly_score")),
         })
 
     # Weighted B2B: sum(beneficiaries) / sum(funding) -- weights by project size

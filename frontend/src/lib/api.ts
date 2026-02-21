@@ -118,8 +118,11 @@ export interface Crisis {
   appeal_type: string;
   funding_state: string;
   people_in_need: number;
+  target_beneficiaries: number;
   funding_gap_usd: number;
   funding_coverage_pct: number;
+  coverage_ratio: number;
+  oversight_score: number;
   b2b_ratio: number;
   crisis_rank: number;
 }
@@ -242,6 +245,7 @@ export interface B2BProject {
   b2b_percentile: number | null;
   is_outlier: boolean;
   cluster_median_b2b: number | null;
+  anomaly_score: number | null;
 }
 
 export interface GlobeB2BResponse {
