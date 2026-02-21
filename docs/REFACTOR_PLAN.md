@@ -1,6 +1,6 @@
 # Crisis Topography — Refactor Implementation Plan
 
-> **Scope:** Transition from flat table reads to a Bronze/Silver/Gold medallion pipeline, volcano-based globe visualization with B2B ratio lines, project-level HPC data ingestion, Gemini-powered vector embeddings for benchmarking, and ElevenLabs-driven crisis comparison.
+> **Scope:** Replace flat table reads with 2 purpose-built Databricks tables, volcano-based globe visualization with B2B ratio lines, project-level HPC data ingestion, Gemini-powered vector embeddings for benchmarking, and ElevenLabs-driven crisis comparison.
 
 ---
 
@@ -23,7 +23,7 @@
 
 | Component | Status |
 |---|---|
-| Databricks tables | 4 flat tables (`plans`, `funding`, `humanitarian_needs`, `population`) in `workspace.default.*`. No medallion layers, no severity scores, no project-level data. |
+| Databricks tables | 4 flat tables (`plans`, `funding`, `humanitarian_needs`, `population`) in `workspace.default.*`. No severity scores, no project-level data, no B2B ratios. |
 | Backend `/api/countries` | Reads all 4 tables at startup into `app.state.data`, aggregates needs + funding per country, returns `people_in_need`, `funding_usd`, `coverage_ratio`, `funding_per_capita`. |
 | Backend `/api/mismatch` | Stub returning hardcoded Sudan mock data. |
 | Backend `/api/compare`, `/api/ask` | Empty files, routers commented out in `main.py`. |
@@ -36,9 +36,9 @@
 
 | Component | Target |
 |---|---|
-| Databricks | Bronze → Silver → Gold medallion. ACAPS severity, HPC project data, FTS funding, HRP plans. B2B ratios at project level. Gemini embeddings for benchmarking. Data range: **2022–2026 only**. |
-| Backend | On-demand SQL queries to Gold tables (`crisis_summary`, `project_b2b`). Vector search proxy for ElevenLabs. Existing `plans`/`funding`/`needs`/`population` data preserved as cross-reference corpus for RAG. |
-| Frontend Globe | Severity-index volcanoes (max 8 crises per country, bar height = severity). B2B ratio lines attached within each volcano bar. Direct SQL queries to Databricks Gold tables via backend proxy. |
+| Databricks | **2 tables.** `crisis_summary` (drives the globe) and `project_embeddings` (drives benchmarking + drill-down + ElevenLabs). Built directly from API ingest — no intermediate layers. Data range: **2022–2026 only**. |
+| Backend | On-demand SQL queries to `crisis_summary` and `project_embeddings`. Vector search proxy for ElevenLabs. Legacy `/api/countries` kept as cross-reference for the agent. |
+| Frontend Globe | Severity-index volcanoes (max 8 crises per country, bar height = severity). B2B ratio lines attached within each volcano bar. On-demand queries to Databricks via backend proxy. |
 | ElevenLabs Agent | Queries `project_embeddings` vector index to find overlooked crises by nearest-neighbor B2B comparison. Stretch: proposes reallocation suggestions. |
 
 ---
@@ -53,7 +53,7 @@
 │                                                                  │
 │  API calls:                                                      │
 │    GET  /api/globe/crises?year=2024          → volcano data      │
-│    GET  /api/globe/b2b?iso3=SDN&year=2024   → B2B ratios        │
+│    GET  /api/globe/b2b?iso3=SDN&year=2024   → project drill-down │
 │    POST /api/benchmark                       → embedding search  │
 │    POST /api/ask                             → RAG Q&A           │
 │    GET  /api/countries?year=2024             → legacy cross-ref  │
@@ -63,39 +63,36 @@
 ┌──────────────────────────────────────────────────────────────────┐
 │                     BACKEND (FastAPI)                             │
 │                                                                  │
-│  /api/globe/crises    → SQL query to gold.crisis_summary         │
-│  /api/globe/b2b       → SQL query to gold.project_b2b            │
+│  /api/globe/crises    → SQL query to crisis_summary              │
+│  /api/globe/b2b       → SQL query to project_embeddings          │
 │  /api/benchmark       → Vector search on project_embeddings      │
 │  /api/ask             → Vector search + LLM (Gemini / LLaMA)     │
-│  /api/countries       → Legacy: cross-reference dataset (kept)   │
+│  /api/countries       → Legacy cross-reference dataset (kept)    │
 │                                                                  │
-│  All queries go through databricks_client.execute_sql()          │
-│  Vector queries go through databricks_client.vector_search()     │
-└──────────┬───────────────────────────────────┬───────────────────┘
-           │                                   │
-           ▼                                   ▼
+│  SQL queries → databricks_client.execute_sql()                   │
+│  Vector queries → databricks_client.vector_search()              │
+└──────────┬───────────────────────────────────────────┬───────────┘
+           │                                           │
+           ▼                                           ▼
 ┌─────────────────────────┐   ┌────────────────────────────────────┐
 │   External APIs         │   │        DATABRICKS                  │
-│   (ingested into Bronze)│   │                                    │
-│                         │   │  BRONZE (raw, append-only)         │
-│  • HPC /plan/year/YYYY  │   │    bronze.plans                    │
-│  • HPC /project/plan/ID │   │    bronze.projects                 │
-│  • HPC /fts/flow        │   │    bronze.fts_flows                │
-│  • HDX HAPI /hum-needs  │   │    bronze.humanitarian_needs       │
-│  • HDX HAPI /population │   │    bronze.population               │
-│  • ACAPS severity API   │   │    bronze.acaps_severity            │
-│                         │   │                                    │
-│  Years: 2022–2026       │   │  SILVER (cleaned, ISO3-keyed)      │
-│                         │   │    silver.crisis_spine              │
-└─────────────────────────┘   │    silver.projects_enriched         │
+│   (ingested by notebooks│   │                                    │
+│    directly into final  │   │  ┌──────────────────────────────┐  │
+│    tables)              │   │  │  crisis_summary              │  │
+│                         │   │  │  One row per crisis per       │  │
+│  • HPC /plan/year/YYYY  │   │  │  country per year. Max 8     │  │
+│  • HPC /project/plan/ID │   │  │  per country. Drives globe.  │  │
+│  • HPC /fts/flow        │   │  └──────────────────────────────┘  │
+│  • HDX HAPI /hum-needs  │   │                                    │
+│  • HDX HAPI /population │   │  ┌──────────────────────────────┐  │
+│  • ACAPS severity API   │   │  │  project_embeddings          │  │
+│                         │   │  │  One row per HRP project.     │  │
+│  Years: 2022–2026       │   │  │  B2B ratios + text blob +    │  │
+│                         │   │  │  embedding vector. Drives     │  │
+└─────────────────────────┘   │  │  drill-down + benchmarking.  │  │
+                              │  └──────────────────────────────┘  │
                               │                                    │
-                              │  GOLD (query-ready)                │
-                              │    gold.crisis_summary  ← globe    │
-                              │    gold.project_b2b     ← globe    │
-                              │    gold.project_embeddings ← RAG   │
-                              │    gold.cross_reference    ← agent │
-                              │                                    │
-                              │  Vector Search Index                │
+                              │  Vector Search Index               │
                               │    project_embeddings_index         │
                               └────────────────────────────────────┘
 ```
@@ -104,278 +101,13 @@
 
 ## 3. Databricks Implementation
 
-### 3.1 Medallion Layer Design
+### 3.1 Final Tables — No Intermediate Layers
 
-#### Bronze — Raw Ingest
+Two notebooks. Each pulls raw data from APIs, cleans/joins/computes in-memory, and writes the finished table. No Bronze, no Silver — just the end product.
 
-All Bronze tables are **append-only** with an `_ingested_at` timestamp column. No transformations. Schema matches the source API response exactly, plus metadata.
+### 3.2 API Sources & Year Filtering
 
-| Table | Source | Ingest Method |
-|---|---|---|
-| `bronze.plans` | `HPC /v1/public/plan/year/{y}` for y in 2022..2026 | One JSON blob per plan, flattened to columns |
-| `bronze.projects` | `HPC /v1/public/project/plan/{planId}` for each plan | **NEW** — one row per project per plan. Fields: `code`, `name`, `currentRequestedFunds`, `targetBeneficiaries`, `globalClusters`, `locations`, `objectives`, `description` |
-| `bronze.fts_flows` | `HPC /v1/public/fts/flow?year={y}&groupby=Country` | Funding flows per country per year |
-| `bronze.humanitarian_needs` | `HDX HAPI /v2/affected-people/humanitarian-needs` | Paginated, all records 2022–2026 |
-| `bronze.population` | `HDX HAPI /v2/geography-infrastructure/baseline-population` | Baseline population per country |
-| `bronze.acaps_severity` | `ACAPS Severity Index API` | **NEW** — crisis severity ratings per country. Fields: `iso3`, `crisis_name`, `overall_severity`, `severity_score`, `date` |
-
-**Notebook: `01_bronze_ingest.py`**
-
-Key additions to current ingestion:
-- Filter all API calls to years **2022–2026** only.
-- Add project-level data pull (loop through all plan IDs, fetch `/project/plan/{id}`).
-- Add ACAPS severity index pull.
-- Append `_ingested_at = current_timestamp()` to every row.
-- Write mode: `append` (not overwrite). Bronze is immutable.
-
-```python
-# Pseudo-structure for project ingest (the critical new piece)
-plan_ids = spark.table("bronze.plans").select("id").distinct().collect()
-
-all_projects = []
-for row in plan_ids:
-    resp = requests.get(f"{HPC_BASE}/project/plan/{row.id}")
-    if resp.ok:
-        for p in resp.json().get("data", []):
-            all_projects.append({
-                "plan_id": row.id,
-                "project_code": p.get("code"),
-                "project_name": p.get("name", ""),
-                "requested_funds": p.get("currentRequestedFunds", 0),
-                "target_beneficiaries": p.get("targetBeneficiaries", 0),
-                "clusters": [c.get("name") for c in p.get("globalClusters", [])],
-                "locations": p.get("locations", []),
-                "description": p.get("description", ""),
-                "objectives": p.get("objectives", ""),
-                "_ingested_at": datetime.utcnow().isoformat(),
-            })
-```
-
-```python
-# ACAPS severity ingest
-ACAPS_URL = "https://api.acaps.org/api/v1/inform-severity-index/"
-resp = requests.get(ACAPS_URL, params={"format": "json", "limit": 2000})
-acaps_data = resp.json().get("results", [])
-# Filter to 2022-2026, write to bronze.acaps_severity
-```
-
-#### Silver — Cleaned & Joined
-
-Silver performs cleaning, standardization, and joining into a crisis-centric spine. All tables are keyed by **ISO3 country code**.
-
-**Table: `silver.crisis_spine`**
-
-One row per **crisis per country per year**. This is the master dimension table.
-
-| Column | Type | Source |
-|---|---|---|
-| `iso3` | STRING | Standardized from all sources |
-| `country_name` | STRING | Canonical name |
-| `year` | INT | 2022–2026 |
-| `crisis_id` | STRING | ACAPS crisis identifier (or synthetic) |
-| `crisis_name` | STRING | From ACAPS |
-| `acaps_severity` | FLOAT | ACAPS overall severity score (0–5 scale) |
-| `severity_class` | STRING | Derived: `Very Low`, `Low`, `Medium`, `High`, `Very High` |
-| `has_hrp` | BOOLEAN | **HRP existence flag** — `TRUE` if a matching HRP plan exists for this country-year |
-| `people_in_need` | BIGINT | From humanitarian_needs, summed for the country-year |
-| `people_targeted` | BIGINT | From HRP plan if available |
-| `requirements_usd` | DECIMAL | FTS total requested |
-| `funding_usd` | DECIMAL | FTS total received |
-| `funding_gap_usd` | DECIMAL | `requirements_usd - funding_usd` |
-| `funding_coverage_pct` | FLOAT | `funding_usd / requirements_usd` |
-
-**Notebook: `02_silver_crisis_spine.py`**
-
-```python
-# Join logic:
-# 1. Start with ACAPS severity as the spine (one row per crisis per country)
-# 2. Left join HRP plans on iso3 + year → set has_hrp flag
-# 3. Left join humanitarian_needs aggregated to country-year
-# 4. Left join FTS funding flows on iso3 + year
-# 5. Compute funding_gap_usd = requirements - funding
-# 6. Compute funding_coverage_pct = funding / requirements
-```
-
-**Table: `silver.projects_enriched`**
-
-One row per **project** with cleaned fields and the B2B ratio pre-computed.
-
-| Column | Type | Source |
-|---|---|---|
-| `project_code` | STRING | HPC project code |
-| `project_name` | STRING | HPC |
-| `plan_id` | INT | HPC plan ID |
-| `iso3` | STRING | Derived from project locations |
-| `country_name` | STRING | Canonical |
-| `year` | INT | From associated plan |
-| `cluster` | STRING | Primary global cluster |
-| `sector` | STRING | Sector if available |
-| `requested_funds` | DECIMAL | `currentRequestedFunds` |
-| `target_beneficiaries` | BIGINT | `targetBeneficiaries` |
-| `b2b_ratio` | FLOAT | **Beneficiary-to-Budget ratio** = `target_beneficiaries / requested_funds`. Higher = more people served per dollar. |
-| `cost_per_beneficiary` | FLOAT | Inverse: `requested_funds / target_beneficiaries` |
-| `description` | STRING | Project description text |
-| `objectives` | STRING | Project objectives text |
-
-**Notebook: `03_silver_projects.py`**
-
-```python
-# Clean projects from bronze
-# 1. Explode locations to get iso3 per project
-# 2. Join plan metadata to get year
-# 3. Filter: requested_funds > 0 AND target_beneficiaries > 0
-# 4. Compute b2b_ratio = target_beneficiaries / requested_funds
-# 5. Compute cost_per_beneficiary = requested_funds / target_beneficiaries
-# 6. Extract primary cluster name
-```
-
-#### Gold — Query-Ready Tables
-
-**Table: `gold.crisis_summary`** — Drives the globe volcanoes.
-
-One row per **crisis per country per year/month**. Globe queries this directly.
-
-| Column | Type | Description |
-|---|---|---|
-| `iso3` | STRING | Country code |
-| `country_name` | STRING | Display name |
-| `lat` | FLOAT | Country centroid latitude |
-| `lng` | FLOAT | Country centroid longitude |
-| `year` | INT | Year |
-| `crisis_id` | STRING | Crisis identifier |
-| `crisis_name` | STRING | Crisis display name |
-| `acaps_severity` | FLOAT | Severity score (0–5), drives volcano bar height |
-| `severity_class` | STRING | Category label |
-| `has_hrp` | BOOLEAN | Whether an HRP exists |
-| `people_in_need` | BIGINT | PIN for this crisis |
-| `funding_gap_usd` | DECIMAL | Unmet funding |
-| `funding_coverage_pct` | FLOAT | % funded |
-| `avg_b2b_ratio` | FLOAT | Average B2B ratio across projects in this crisis |
-| `median_b2b_ratio` | FLOAT | Median B2B ratio |
-| `project_count` | INT | Number of HRP projects |
-| `crisis_rank` | INT | Rank within country (1 = worst), **capped at 8** |
-
-**Notebook: `04_gold_crisis_summary.py`**
-
-```python
-# 1. Start from silver.crisis_spine
-# 2. Join aggregated project B2B stats from silver.projects_enriched
-#    (avg, median b2b_ratio grouped by iso3+year+crisis_id)
-# 3. Add country centroid lat/lng from static lookup
-# 4. Rank crises within each country by acaps_severity DESC
-# 5. Filter to crisis_rank <= 8 (max 8 per country for globe)
-# 6. Write to gold.crisis_summary
-```
-
-**Table: `gold.project_b2b`** — B2B ratio detail for globe drill-down.
-
-| Column | Type | Description |
-|---|---|---|
-| `iso3` | STRING | Country code |
-| `year` | INT | Year |
-| `project_code` | STRING | Project identifier |
-| `project_name` | STRING | Display name |
-| `cluster` | STRING | Humanitarian cluster |
-| `requested_funds` | DECIMAL | Budget |
-| `target_beneficiaries` | BIGINT | People targeted |
-| `b2b_ratio` | FLOAT | Beneficiaries per dollar |
-| `cost_per_beneficiary` | FLOAT | Dollars per beneficiary |
-| `b2b_percentile` | FLOAT | Percentile rank within cluster (0–1) |
-| `is_outlier` | BOOLEAN | Below 10th or above 90th percentile |
-| `cluster_median_b2b` | FLOAT | For comparison |
-
-**Notebook: `05_gold_project_b2b.py`**
-
-```python
-# 1. Read silver.projects_enriched
-# 2. Compute per-cluster percentiles for b2b_ratio
-# 3. Flag outliers (below p10 or above p90)
-# 4. Attach cluster-level median for delta comparison
-# 5. Write to gold.project_b2b
-```
-
-**Table: `gold.project_embeddings`** — Powers benchmarking via vector search.
-
-| Column | Type | Description |
-|---|---|---|
-| `project_id` | STRING | `{project_code}_{year}` |
-| `iso3` | STRING | Country |
-| `year` | INT | Year |
-| `cluster` | STRING | Cluster |
-| `b2b_ratio` | FLOAT | For comparison |
-| `cost_per_beneficiary` | FLOAT | For comparison |
-| `text_blob` | STRING | Concatenation of: project name + cluster + sector + description + country + year |
-| `embedding` | ARRAY<FLOAT> | Gemini embedding vector |
-
-**Notebook: `06_gold_embeddings.py`**
-
-```python
-# 1. Read silver.projects_enriched
-# 2. Construct text_blob per project:
-#    f"{project_name} | {cluster} | {sector} | {description} | {country_name} | {year}"
-# 3. Call Gemini embedding API (or Databricks managed embedding endpoint)
-#    for each text_blob in batches
-# 4. Store embedding vector alongside project metadata
-# 5. Write to gold.project_embeddings
-# 6. Create/update Databricks Vector Search index on this table
-```
-
-Vector Search Index configuration:
-```python
-vsc.create_delta_sync_index(
-    endpoint_name="crisis-rag-endpoint",
-    index_name="gold.project_embeddings_index",
-    source_table_name="gold.project_embeddings",
-    pipeline_type="TRIGGERED",
-    primary_key="project_id",
-    embedding_source_column="text_blob",
-    embedding_model_endpoint_name="databricks-bge-large-en"
-    # OR use pre-computed Gemini embeddings with embedding_vector_column="embedding"
-)
-```
-
-**Table: `gold.cross_reference`** — Preserved legacy data for agent RAG context.
-
-| Column | Type | Description |
-|---|---|---|
-| `doc_id` | STRING | `{iso3}_{year}` |
-| `iso3` | STRING | Country |
-| `year` | INT | Year |
-| `text` | STRING | Natural language summary of plans, funding, needs, population for this country-year |
-
-This table is built from the original 4 tables (plans, funding, humanitarian_needs, population) and serves as the cross-reference dataset the ElevenLabs agent uses to compare crises that did NOT receive HRP plans against those that did.
-
-**Notebook: `07_gold_cross_reference.py`**
-
-```python
-# 1. Join plans + funding + humanitarian_needs + population by iso3 + year
-# 2. For each country-year, generate a text summary:
-#    "Country: {name} ({iso3}), Year: {year}.
-#     HRP Plan: {plan_name or 'No HRP plan'}.
-#     People in need: {pin}. Population: {pop}.
-#     Funding requested: ${req}. Funding received: ${rcv}. Gap: ${gap}.
-#     Coverage: {pct}%. Funding per capita: ${fpc}."
-# 3. Write to gold.cross_reference
-# 4. Can optionally add to the same vector search index
-```
-
-### 3.2 Notebook Execution Order
-
-```
-01_bronze_ingest.py
-    ↓
-02_silver_crisis_spine.py
-    ↓
-03_silver_projects.py
-    ↓ (parallel from here)
-04_gold_crisis_summary.py    05_gold_project_b2b.py
-    ↓                            ↓
-06_gold_embeddings.py
-    ↓
-07_gold_cross_reference.py
-```
-
-### 3.3 API Sources & Year Filtering
+All API calls are scoped to **2022–2026**.
 
 | Source | Endpoint | Year Filter Strategy |
 |---|---|---|
@@ -386,13 +118,335 @@ This table is built from the original 4 tables (plans, funding, humanitarian_nee
 | HDX Population | `/v2/geography-infrastructure/baseline-population` | Take latest available |
 | ACAPS Severity | ACAPS Inform Severity Index API | Filter response by date >= 2022-01-01 |
 
+### 3.3 Table 1: `crisis_summary`
+
+**Drives the globe volcanoes.** One row per crisis per country per year, capped at 8 crises per country.
+
+**Notebook: `01_crisis_summary.py`**
+
+This single notebook ingests from 4 API sources, joins everything, and writes the final table.
+
+#### Schema
+
+| Column | Type | Description |
+|---|---|---|
+| `iso3` | STRING | ISO3 country code |
+| `country_name` | STRING | Display name |
+| `lat` | FLOAT | Country centroid latitude |
+| `lng` | FLOAT | Country centroid longitude |
+| `year` | INT | 2022–2026 |
+| `crisis_id` | STRING | ACAPS crisis identifier |
+| `crisis_name` | STRING | Crisis display name |
+| `acaps_severity` | FLOAT | Severity score (0–5), drives volcano bar height |
+| `severity_class` | STRING | `Very Low` / `Low` / `Medium` / `High` / `Very High` |
+| `has_hrp` | BOOLEAN | Whether an HRP plan exists for this country-year |
+| `people_in_need` | BIGINT | PIN for this country-year |
+| `requirements_usd` | DECIMAL | Total funding requested |
+| `funding_usd` | DECIMAL | Total funding received |
+| `funding_gap_usd` | DECIMAL | `requirements_usd - funding_usd` |
+| `funding_coverage_pct` | FLOAT | `funding_usd / requirements_usd` |
+| `avg_b2b_ratio` | FLOAT | Average B2B ratio across projects in this crisis |
+| `median_b2b_ratio` | FLOAT | Median B2B ratio |
+| `project_count` | INT | Number of HRP projects |
+| `crisis_rank` | INT | Rank within country by severity (1 = worst), **capped at 8** |
+
+#### Notebook Logic
+
+```python
+# 01_crisis_summary.py — Ingest + Build in One Shot
+
+import requests
+import pandas as pd
+from datetime import datetime
+
+HPC_BASE = "https://api.hpc.tools/v1/public"
+HDX_BASE = "https://hapi.humdata.org/api/v2"
+ACAPS_URL = "https://api.acaps.org/api/v1/inform-severity-index/"
+YEARS = range(2022, 2027)
+
+# ── Step 1: Pull ACAPS severity (the spine) ──
+acaps_resp = requests.get(ACAPS_URL, params={"format": "json", "limit": 2000})
+acaps_raw = acaps_resp.json().get("results", [])
+acaps_df = pd.DataFrame(acaps_raw)
+# Filter to 2022–2026, extract: iso3, crisis_id, crisis_name, severity, year
+# Derive severity_class from score thresholds
+
+# ── Step 2: Pull HRP plans (for has_hrp flag) ──
+all_plans = []
+for y in YEARS:
+    resp = requests.get(f"{HPC_BASE}/plan/year/{y}")
+    if resp.ok:
+        for p in resp.json().get("data", []):
+            # Extract plan country ISO3 + year
+            all_plans.append(...)
+plans_df = pd.DataFrame(all_plans)
+
+# ── Step 3: Pull FTS funding flows ──
+all_flows = []
+for y in YEARS:
+    resp = requests.get(f"{HPC_BASE}/fts/flow", params={"year": y, "groupby": "Country"})
+    if resp.ok:
+        # Extract country ISO3, funding_usd, requirements_usd per country per year
+        ...
+flows_df = pd.DataFrame(all_flows)
+
+# ── Step 4: Pull humanitarian needs ──
+all_needs = []
+offset = 0
+while True:
+    resp = requests.get(f"{HDX_BASE}/affected-people/humanitarian-needs",
+                        params={"app_identifier": APP_ID, "limit": 1000, "offset": offset})
+    data = resp.json().get("data", [])
+    if not data:
+        break
+    all_needs.extend(data)
+    offset += 1000
+needs_df = pd.DataFrame(all_needs)
+# Filter to 2022–2026 via reference_period_start
+# Aggregate people_in_need by country-year
+
+# ── Step 5: Pull project data for B2B aggregates ──
+plan_ids = plans_df["plan_id"].unique()
+all_projects = []
+for pid in plan_ids:
+    resp = requests.get(f"{HPC_BASE}/project/plan/{pid}")
+    if resp.ok:
+        for p in resp.json().get("data", []):
+            if p.get("currentRequestedFunds", 0) > 0 and p.get("targetBeneficiaries", 0) > 0:
+                all_projects.append({
+                    "plan_id": pid,
+                    "iso3": p.get("locations", [{}])[0].get("iso3", ""),
+                    "requested_funds": p["currentRequestedFunds"],
+                    "target_beneficiaries": p["targetBeneficiaries"],
+                })
+projects_df = pd.DataFrame(all_projects)
+projects_df["b2b_ratio"] = projects_df["target_beneficiaries"] / projects_df["requested_funds"]
+
+# Aggregate B2B stats per country-year
+b2b_agg = projects_df.groupby(["iso3", "year"]).agg(
+    avg_b2b_ratio=("b2b_ratio", "mean"),
+    median_b2b_ratio=("b2b_ratio", "median"),
+    project_count=("b2b_ratio", "count"),
+).reset_index()
+
+# ── Step 6: Join everything ──
+# Start with acaps_df (spine)
+# Left join plans_df → has_hrp = True/False
+# Left join flows_df → funding_usd, requirements_usd, funding_gap_usd, funding_coverage_pct
+# Left join needs_agg → people_in_need
+# Left join b2b_agg → avg_b2b_ratio, median_b2b_ratio, project_count
+# Add lat/lng from static country centroid lookup
+# Rank crises within each country by acaps_severity DESC
+# Filter to crisis_rank <= 8
+
+# ── Step 7: Write ──
+crisis_summary_sdf = spark.createDataFrame(final_df)
+crisis_summary_sdf.write.format("delta").mode("overwrite").saveAsTable("workspace.default.crisis_summary")
+```
+
+#### Country Centroid Lookup
+
+Include a static dict or CSV with lat/lng for ~60 crisis-affected countries. Example:
+
+```python
+CENTROIDS = {
+    "SDN": (15.5, 32.5),
+    "YEM": (15.3, 44.2),
+    "UKR": (48.4, 31.2),
+    "SOM": (5.2, 46.2),
+    "AFG": (33.9, 67.7),
+    "SYR": (35.0, 38.5),
+    "ETH": (9.1, 40.5),
+    "COD": (-4.0, 21.8),
+    "MMR": (21.9, 95.9),
+    "BGD": (23.7, 90.4),
+    # ... etc
+}
+```
+
+### 3.4 Table 2: `project_embeddings`
+
+**Drives everything project-level:** globe B2B drill-down, ElevenLabs benchmarking, and vector search. One row per HRP project.
+
+**Notebook: `02_project_embeddings.py`**
+
+#### Schema
+
+| Column | Type | Description |
+|---|---|---|
+| `project_id` | STRING | `{project_code}_{year}` (primary key) |
+| `project_code` | STRING | HPC project code |
+| `project_name` | STRING | Display name |
+| `iso3` | STRING | Country code |
+| `country_name` | STRING | Country display name |
+| `year` | INT | 2022–2026 |
+| `cluster` | STRING | Primary humanitarian cluster |
+| `sector` | STRING | Sector if available |
+| `requested_funds` | DECIMAL | Budget (currentRequestedFunds) |
+| `target_beneficiaries` | BIGINT | People targeted |
+| `b2b_ratio` | FLOAT | `target_beneficiaries / requested_funds` |
+| `cost_per_beneficiary` | FLOAT | `requested_funds / target_beneficiaries` |
+| `b2b_percentile` | FLOAT | Percentile rank within cluster (0–1) |
+| `is_outlier` | BOOLEAN | Below 10th or above 90th percentile within cluster |
+| `cluster_median_b2b` | FLOAT | Median B2B for this cluster (for delta comparison) |
+| `description` | STRING | Project description |
+| `objectives` | STRING | Project objectives |
+| `text_blob` | STRING | Concatenation: `project_name \| cluster \| sector \| description \| country_name \| year` |
+| `embedding` | ARRAY\<FLOAT\> | Vector embedding of `text_blob` |
+
+#### Notebook Logic
+
+```python
+# 02_project_embeddings.py — Ingest + Compute + Embed in One Shot
+
+import requests
+import pandas as pd
+import numpy as np
+
+HPC_BASE = "https://api.hpc.tools/v1/public"
+YEARS = range(2022, 2027)
+
+# ── Step 1: Pull all plans to get plan IDs ──
+all_plans = []
+for y in YEARS:
+    resp = requests.get(f"{HPC_BASE}/plan/year/{y}")
+    if resp.ok:
+        for p in resp.json().get("data", []):
+            all_plans.append({"plan_id": p["id"], "year": y,
+                              "iso3": ..., "country_name": ...})
+plans_df = pd.DataFrame(all_plans)
+
+# ── Step 2: Pull project-level data for every plan ──
+all_projects = []
+for _, plan in plans_df.iterrows():
+    resp = requests.get(f"{HPC_BASE}/project/plan/{plan['plan_id']}")
+    if resp.ok:
+        for p in resp.json().get("data", []):
+            all_projects.append({
+                "project_code": p.get("code"),
+                "project_name": p.get("name", ""),
+                "plan_id": plan["plan_id"],
+                "iso3": p.get("locations", [{}])[0].get("iso3", plan["iso3"]),
+                "country_name": plan["country_name"],
+                "year": plan["year"],
+                "cluster": (p.get("globalClusters") or [{}])[0].get("name", "Unknown"),
+                "sector": (p.get("sectors") or [{}])[0].get("name", ""),
+                "requested_funds": p.get("currentRequestedFunds", 0),
+                "target_beneficiaries": p.get("targetBeneficiaries", 0),
+                "description": p.get("description", ""),
+                "objectives": p.get("objectives", ""),
+            })
+
+projects_df = pd.DataFrame(all_projects)
+
+# ── Step 3: Filter to valid projects ──
+projects_df = projects_df[
+    (projects_df["requested_funds"] > 0) &
+    (projects_df["target_beneficiaries"] > 0)
+]
+
+# ── Step 4: Compute B2B ratios ──
+projects_df["b2b_ratio"] = projects_df["target_beneficiaries"] / projects_df["requested_funds"]
+projects_df["cost_per_beneficiary"] = projects_df["requested_funds"] / projects_df["target_beneficiaries"]
+
+# ── Step 5: Compute per-cluster percentiles + outlier flags ──
+for cluster in projects_df["cluster"].unique():
+    mask = projects_df["cluster"] == cluster
+    values = projects_df.loc[mask, "b2b_ratio"]
+    projects_df.loc[mask, "b2b_percentile"] = values.rank(pct=True)
+    projects_df.loc[mask, "cluster_median_b2b"] = values.median()
+
+projects_df["is_outlier"] = (projects_df["b2b_percentile"] < 0.10) | (projects_df["b2b_percentile"] > 0.90)
+
+# ── Step 6: Build text blob for embedding ──
+projects_df["text_blob"] = (
+    projects_df["project_name"] + " | " +
+    projects_df["cluster"] + " | " +
+    projects_df["sector"] + " | " +
+    projects_df["description"] + " | " +
+    projects_df["country_name"] + " | " +
+    projects_df["year"].astype(str)
+)
+
+# ── Step 7: Generate embeddings ──
+# Option A: Databricks managed embeddings (let Vector Search handle it)
+# Option B: Call Gemini embedding API in batches
+#
+# If using Databricks managed embeddings, skip this step and set
+# embedding_source_column="text_blob" when creating the index.
+#
+# If using Gemini directly:
+# import google.generativeai as genai
+# genai.configure(api_key=GEMINI_API_KEY)
+# model = genai.GenerativeModel("models/text-embedding-004")
+# embeddings = []
+# for batch in chunked(projects_df["text_blob"].tolist(), 100):
+#     result = genai.embed_content(model="models/text-embedding-004",
+#                                   content=batch)
+#     embeddings.extend(result["embedding"])
+# projects_df["embedding"] = embeddings
+
+# ── Step 8: Create project_id and write ──
+projects_df["project_id"] = projects_df["project_code"] + "_" + projects_df["year"].astype(str)
+
+sdf = spark.createDataFrame(projects_df)
+sdf.write.format("delta").mode("overwrite").saveAsTable("workspace.default.project_embeddings")
+
+# ── Step 9: Create Vector Search Index ──
+from databricks.vector_search.client import VectorSearchClient
+
+vsc = VectorSearchClient()
+
+# Create endpoint if it doesn't exist (1 allowed on Free Edition)
+try:
+    vsc.create_endpoint(name="crisis-rag-endpoint")
+except:
+    pass  # Already exists
+
+vsc.create_delta_sync_index(
+    endpoint_name="crisis-rag-endpoint",
+    index_name="workspace.default.project_embeddings_index",
+    source_table_name="workspace.default.project_embeddings",
+    pipeline_type="TRIGGERED",
+    primary_key="project_id",
+    embedding_source_column="text_blob",
+    embedding_model_endpoint_name="databricks-bge-large-en"
+)
+```
+
+### 3.5 Notebook Execution Order
+
+```
+01_crisis_summary.py     02_project_embeddings.py
+       ↓                          ↓
+  crisis_summary            project_embeddings
+  (globe volcanoes)         (drill-down + benchmarking + RAG)
+                                   ↓
+                          Vector Search Index
+                          (project_embeddings_index)
+```
+
+These two notebooks are independent — they can run in parallel. Both pull from the same APIs, so there's some redundancy in HPC plan/project fetching. If that bothers you, extract a shared helper function, but for a hackathon it doesn't matter.
+
+### 3.6 Databricks Table Naming
+
+Using the existing `workspace.default.*` catalog:
+
+| Table | Full Name |
+|---|---|
+| Crisis summary | `workspace.default.crisis_summary` |
+| Project embeddings | `workspace.default.project_embeddings` |
+| Vector index | `workspace.default.project_embeddings_index` |
+
+The old tables (`plans`, `funding`, `humanitarian_needs`, `population`) remain untouched. They still power the legacy `/api/countries` endpoint and serve as cross-reference context for the ElevenLabs agent.
+
 ---
 
 ## 4. Backend Implementation
 
 ### 4.1 New Router: `/api/globe/crises`
 
-**Purpose:** Serve volcano data for the globe. Queries `gold.crisis_summary` on demand (no startup cache).
+**Purpose:** Serve volcano data for the globe. Queries `crisis_summary` on demand.
 
 ```
 GET /api/globe/crises?year=2024
@@ -419,6 +473,7 @@ Response:
           "funding_gap_usd": 1960000000,
           "funding_coverage_pct": 0.30,
           "avg_b2b_ratio": 0.0042,
+          "median_b2b_ratio": 0.0038,
           "project_count": 156,
           "crisis_rank": 1
         }
@@ -430,7 +485,7 @@ Response:
 
 Implementation: Direct SQL via `databricks_client.execute_sql()`:
 ```sql
-SELECT * FROM gold.crisis_summary
+SELECT * FROM workspace.default.crisis_summary
 WHERE year = :year
 ORDER BY iso3, crisis_rank
 ```
@@ -439,7 +494,7 @@ Then group rows by `iso3` in Python before returning.
 
 ### 4.2 New Router: `/api/globe/b2b`
 
-**Purpose:** Serve B2B ratio breakdown for a specific country, used when user clicks a volcano.
+**Purpose:** Serve project-level B2B breakdown when user clicks a volcano. Queries `project_embeddings` (which has all the project-level data).
 
 ```
 GET /api/globe/b2b?iso3=SDN&year=2024
@@ -475,14 +530,17 @@ Response:
 
 Implementation:
 ```sql
-SELECT * FROM gold.project_b2b
+SELECT project_code, project_name, cluster, requested_funds,
+       target_beneficiaries, b2b_ratio, cost_per_beneficiary,
+       b2b_percentile, is_outlier, cluster_median_b2b
+FROM workspace.default.project_embeddings
 WHERE iso3 = :iso3 AND year = :year
 ORDER BY b2b_ratio DESC
 ```
 
 ### 4.3 New Router: `/api/benchmark`
 
-**Purpose:** Given a project (or country-crisis), find nearest neighbors in embedding space and compare B2B ratios. This is what ElevenLabs calls for benchmarking.
+**Purpose:** Given a project, find nearest neighbors in embedding space and compare B2B ratios. This is what ElevenLabs calls for benchmarking.
 
 ```
 POST /api/benchmark
@@ -517,14 +575,15 @@ Response:
 ```
 
 Implementation:
-1. Look up the query project in `gold.project_b2b` to get its metadata.
-2. Call `databricks_client.vector_search()` with the project's `text_blob` to find nearest neighbors.
-3. Fetch neighbor B2B ratios from `gold.project_b2b`.
-4. Compute deltas and return.
+1. Look up the query project in `project_embeddings` to get its `text_blob` and B2B metadata.
+2. Call `databricks_client.vector_search()` with the `text_blob` to find nearest neighbors.
+3. The vector search returns neighbor `project_id`s with similarity scores.
+4. Fetch neighbor B2B ratios from the same `project_embeddings` table.
+5. Compute deltas and return.
 
-### 4.4 Updated Router: `/api/ask`
+### 4.4 Implemented Router: `/api/ask`
 
-**Purpose:** RAG-based Q&A for the ElevenLabs agent. Searches both `project_embeddings` and `cross_reference` for context.
+**Purpose:** RAG-based Q&A for the ElevenLabs agent. Searches `project_embeddings` for context, then sends to LLM.
 
 ```
 POST /api/ask
@@ -532,71 +591,110 @@ POST /api/ask
 ```
 
 Implementation:
-1. Vector search against `gold.project_embeddings_index` with the question.
-2. Optionally also query `gold.cross_reference` for country-level context.
-3. Assemble context, send to LLM (Databricks Foundation Model or Gemini).
-4. Return answer text (ElevenLabs speaks it).
+1. Vector search against `project_embeddings_index` with the question text.
+2. Retrieve matching projects with their metadata.
+3. Optionally also query `crisis_summary` for country-level context.
+4. Assemble context + question, send to LLM (Databricks Foundation Model or Gemini).
+5. Return answer text (ElevenLabs speaks it).
 
 ### 4.5 Legacy Router: `/api/countries` (Kept)
 
-The existing `/api/countries` endpoint stays as-is. It continues reading from the original 4 tables (now persisted in `gold.cross_reference` or still accessible from Bronze). This provides backward compatibility and serves as the cross-reference dataset the ElevenLabs agent can use.
+The existing `/api/countries` endpoint stays as-is. It continues reading from the original 4 tables (`plans`, `funding`, `humanitarian_needs`, `population`). These tables remain in Databricks untouched. This endpoint provides backward compatibility and serves as cross-reference context the ElevenLabs agent can use to compare crises that did NOT receive HRP plans.
 
 ### 4.6 Deprecated: `/api/mismatch`
 
-The stub mismatch endpoint is replaced by `/api/globe/crises` which provides severity + B2B data in a globe-ready format. The mismatch router should be removed or redirected.
+The stub mismatch endpoint is replaced by `/api/globe/crises`. Remove the mismatch router.
 
 ### 4.7 New Service: `databricks_client.py` Additions
 
-Add `vector_search()` function:
+Add `vector_search()`:
 ```python
 async def vector_search(query_text: str, index_name: str, num_results: int = 5) -> list[dict]:
     """Query a Databricks Vector Search index."""
-    ...
+    host = os.getenv("DATABRICKS_HOST")
+    token = os.getenv("DATABRICKS_TOKEN")
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(
+            f"{host}/api/2.0/vector-search/indexes/{index_name}/query",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "query_text": query_text,
+                "columns": ["project_id", "project_code", "iso3", "cluster",
+                             "b2b_ratio", "cost_per_beneficiary", "text_blob"],
+                "num_results": num_results,
+            },
+        )
+        resp.raise_for_status()
+        return resp.json().get("result", {}).get("data_array", [])
 ```
 
-Add `query_llm()` function:
+Add `query_llm()`:
 ```python
 async def query_llm(prompt: str, model: str = "databricks-meta-llama-3-1-70b-instruct") -> str:
     """Call a Databricks Foundation Model serving endpoint."""
-    ...
+    host = os.getenv("DATABRICKS_HOST")
+    token = os.getenv("DATABRICKS_TOKEN")
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(
+            f"{host}/serving-endpoints/{model}/invocations",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 500,
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
 ```
 
 ### 4.8 Startup Change: No More Bulk Load
 
 **Before:** `data_loader.py` runs 4 `SELECT *` queries at startup and caches everything in `app.state.data`.
 
-**After:** Remove the bulk startup load. Globe endpoints query Gold tables on demand (they are small and fast via SQL warehouse). The only startup action is a health-check ping to verify Databricks connectivity.
+**After:** Remove the bulk startup load. Globe endpoints query Databricks on demand. The only startup action is a health-check ping to verify connectivity.
 
 ```python
 # backend/services/data_loader.py (refactored)
-async def startup_check() -> None:
-    """Verify Databricks is reachable. No bulk data load."""
+from .databricks_client import execute_sql
+
+async def load_all_data() -> dict:
+    """Verify Databricks is reachable. Load legacy tables for /api/countries."""
     await execute_sql("SELECT 1")
+    # Still load legacy tables for the /api/countries endpoint
+    plans = await execute_sql("SELECT * FROM workspace.default.plans")
+    funding = await execute_sql("SELECT * FROM workspace.default.funding")
+    humanitarian_needs = await execute_sql("SELECT * FROM workspace.default.humanitarian_needs")
+    population = await execute_sql("SELECT * FROM workspace.default.population")
+    return {
+        "plans": plans,
+        "funding": funding,
+        "humanitarian_needs": humanitarian_needs,
+        "population": population,
+    }
 ```
 
-The `/api/countries` legacy endpoint can either:
-- Query on demand: `SELECT * FROM gold.cross_reference WHERE year = :year`
-- Or keep the old bulk-load behavior behind a feature flag
+The new globe endpoints (`/api/globe/crises`, `/api/globe/b2b`) query `crisis_summary` and `project_embeddings` on demand — they do NOT use `app.state.data`.
 
 ### 4.9 Updated Backend Directory Structure
 
 ```
 backend/
 ├── main.py                          # Updated lifespan, new routers
-├── requirements.txt                 # Add google-generativeai if using Gemini directly
+├── requirements.txt                 # Unchanged (or add google-generativeai)
 ├── .env                             # DATABRICKS_HOST, DATABRICKS_TOKEN, WAREHOUSE_ID, ELEVENLABS_API_KEY
 ├── routers/
-│   ├── globe.py                     # NEW — GET /api/globe/crises, GET /api/globe/b2b
-│   ├── benchmark.py                 # NEW — POST /api/benchmark
-│   ├── ask.py                       # IMPLEMENTED — POST /api/ask (RAG)
-│   ├── countries.py                 # KEPT — GET /api/countries (legacy cross-ref)
-│   ├── compare.py                   # REMOVED or merged into benchmark
-│   └── mismatch.py                  # REMOVED — replaced by /api/globe/crises
+│   ├── globe.py                     # NEW — GET /crises, GET /b2b
+│   ├── benchmark.py                 # NEW — POST /benchmark
+│   ├── ask.py                       # IMPLEMENTED — POST /ask (RAG)
+│   └── countries.py                 # KEPT — GET /countries (legacy)
 └── services/
     ├── databricks_client.py         # UPDATED — add vector_search(), query_llm()
-    ├── data_loader.py               # UPDATED — startup_check() only, no bulk load
-    └── mismatch_engine.py           # REMOVED — logic now in Databricks Gold
+    └── data_loader.py               # UPDATED — still loads legacy tables
 ```
+
+Files to remove: `mismatch.py`, `mismatch_engine.py`, `compare.py`.
 
 ### 4.10 Updated `main.py`
 
@@ -615,11 +713,11 @@ app.include_router(countries.router, prefix="/api")  # legacy
 
 ### 5.1 Globe Visualization: Severity Volcanoes
 
-The globe uses `react-globe.gl`'s **`customLayerData`** (or `htmlElementsData`) to render 3D volcano bar clusters at each country's centroid.
+The globe uses `react-globe.gl`'s **`customLayerData`** to render 3D volcano bar clusters at each country's centroid.
 
 **Volcano Concept:**
 
-Each country with crises renders a cluster of up to 8 vertical bars ("volcano") at the country's lat/lng. Each bar represents one crisis:
+Each country renders a cluster of up to 8 vertical bars at its lat/lng. Each bar = one crisis.
 
 ```
          ▐█▌             ← Crisis 1: severity 4.8 (tallest)
@@ -636,21 +734,21 @@ Each country with crises renders a cluster of up to 8 vertical bars ("volcano") 
 
 **B2B Ratio Lines within Volcanoes:**
 
-Each volcano bar has a horizontal line marker indicating the average B2B ratio for that crisis relative to a global baseline:
+Each bar has a horizontal line showing the avg B2B ratio for that crisis relative to a global baseline:
 
 ```
      ▐█▌
-     ▐█━━━━▌   ← B2B line at 72nd percentile (high ratio = good)
+     ▐█━━━━▌   ← B2B line at 72nd percentile (green = efficient)
      ▐█▌
      ▐█▌
-     ▐━▌       ← B2B line at 15th percentile (low ratio = bad, red)
+     ▐━▌       ← B2B line at 15th percentile (red = inefficient)
      ▐█▌
 ```
 
-- Line position within bar = `avg_b2b_ratio` percentile mapped to bar height
-- Line color: green if above median, red if below → instant visual signal of efficiency
+- Line Y-position within bar = `avg_b2b_ratio` mapped as percentile of bar height
+- Line color: green if above median, red if below
 
-**Implementation approach using `customThreeObject`:**
+**Implementation with `customThreeObject`:**
 
 ```tsx
 import * as THREE from 'three';
@@ -798,6 +896,7 @@ interface CrisisSummary {
   funding_gap_usd: number;
   funding_coverage_pct: number;
   avg_b2b_ratio: number;
+  median_b2b_ratio: number;
   project_count: number;
   crisis_rank: number;
 }
@@ -836,9 +935,7 @@ interface BenchmarkResult {
 
 ### 6.1 Agent Configuration
 
-Update the ElevenLabs agent with new capabilities:
-
-**System Prompt (updated):**
+**System Prompt:**
 ```
 You are a humanitarian crisis analyst assistant for the Crisis Topography Command Center.
 You help users understand:
@@ -853,13 +950,47 @@ Always cite specific numbers. When discussing B2B ratios, explain whether a high
 indicates better or worse efficiency (higher = more beneficiaries per dollar = better).
 ```
 
-### 6.2 Client Tools (Updated)
+### 6.2 Client Tools
 
-**Tool 1: `navigateToCountry`** — Same as before.
+**Tool 1: `navigateToCountry`** — Rotates globe to a country.
 
-**Tool 2: `filterByYear`** — Updated range to 2022–2026.
+```json
+{
+  "name": "navigateToCountry",
+  "description": "Navigate the globe to focus on a specific country.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "iso3": {
+        "type": "string",
+        "description": "ISO 3166-1 alpha-3 country code (e.g., SDN, UKR, YEM)"
+      }
+    },
+    "required": ["iso3"]
+  }
+}
+```
 
-**Tool 3: `benchmarkProject`** — NEW
+**Tool 2: `filterByYear`** — Changes displayed year (2022–2026).
+
+```json
+{
+  "name": "filterByYear",
+  "description": "Change the year of data displayed on the globe.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "year": {
+        "type": "integer",
+        "description": "The year to display (2022-2026)"
+      }
+    },
+    "required": ["year"]
+  }
+}
+```
+
+**Tool 3: `benchmarkProject`** — Finds similar projects and compares B2B ratios.
 
 ```json
 {
@@ -885,8 +1016,14 @@ indicates better or worse efficiency (higher = more beneficiaries per dollar = b
 Implementation in `VoiceAgent.tsx`:
 ```tsx
 clientTools: {
-  navigateToCountry: ({ iso3 }) => { ... },
-  filterByYear: ({ year }) => { ... },
+  navigateToCountry: ({ iso3 }) => {
+    setSelectedCountry(iso3);
+    return `Navigated to ${iso3}`;
+  },
+  filterByYear: ({ year }) => {
+    setYear(year);
+    return `Showing data for ${year}`;
+  },
   benchmarkProject: async ({ project_code, num_neighbors }) => {
     const result = await fetchBenchmark(project_code, num_neighbors || 5);
     return JSON.stringify(result);
@@ -896,7 +1033,7 @@ clientTools: {
 
 ### 6.3 Server Tool: `/api/ask`
 
-The ElevenLabs agent dashboard should have a server-side tool configured to call `/api/ask`:
+Configure in ElevenLabs dashboard as a server-side tool:
 
 ```json
 {
@@ -917,7 +1054,7 @@ The ElevenLabs agent dashboard should have a server-side tool configured to call
 }
 ```
 
-### 6.4 Benchmarking Query Flow (The Core Use Case)
+### 6.4 Benchmarking Query Flow
 
 ```
 User: "Are there health projects in East Africa that are underfunded
@@ -938,7 +1075,8 @@ ElevenLabs Agent:
 
 ### 6.5 Stretch Goal: Reallocation Suggestions
 
-If the LLM finds significant B2B deltas:
+If the LLM finds significant B2B deltas, it can propose actionable recommendations:
+
 ```
 Agent: "Based on benchmarking, the Somalia health response could serve
 an additional 150,000 beneficiaries if funded at the same rate as
@@ -950,7 +1088,7 @@ comparable projects in Bangladesh. I recommend:
    has no response plan despite severity score of 4.2."
 ```
 
-This is implemented by adding a follow-up LLM call in `/api/ask` that includes the benchmark results as context and a prompt instructing the model to generate actionable suggestions.
+Implemented by adding a follow-up LLM call in `/api/ask` that includes benchmark results as context and a prompt requesting actionable suggestions.
 
 ---
 
@@ -990,36 +1128,29 @@ The frontend expects exactly this shape from `/api/globe/crises`:
 }
 ```
 
-### 7.2 Databricks Table Naming Convention
+### 7.2 Databricks Table Summary
 
-All new tables use a three-tier catalog:
-
-| Layer | Prefix | Example |
-|---|---|---|
-| Bronze | `bronze.` | `bronze.projects` |
-| Silver | `silver.` | `silver.crisis_spine` |
-| Gold | `gold.` | `gold.crisis_summary` |
-
-If using `workspace.default.*` (single catalog), prefix table names:
-- `workspace.default.bronze_projects`
-- `workspace.default.silver_crisis_spine`
-- `workspace.default.gold_crisis_summary`
+| Table | Rows | Purpose | Queried By |
+|---|---|---|---|
+| `workspace.default.crisis_summary` | ~200–400 (crises × years) | Globe volcanoes + B2B summary lines | `/api/globe/crises` |
+| `workspace.default.project_embeddings` | ~5,000–15,000 (projects × years) | Drill-down, benchmarking, RAG | `/api/globe/b2b`, `/api/benchmark`, `/api/ask` |
+| `workspace.default.plans` | (legacy, unchanged) | Cross-reference for agent | `/api/countries` |
+| `workspace.default.funding` | (legacy, unchanged) | Cross-reference for agent | `/api/countries` |
+| `workspace.default.humanitarian_needs` | (legacy, unchanged) | Cross-reference for agent | `/api/countries` |
+| `workspace.default.population` | (legacy, unchanged) | Cross-reference for agent | `/api/countries` |
 
 ---
 
 ## 8. Migration Checklist
 
-### Phase 1: Databricks Pipeline
+### Phase 1: Databricks
 
-- [ ] Notebook `01_bronze_ingest.py` — ingest all 6 sources for 2022–2026
-- [ ] Verify `bronze.projects` has project-level data with `currentRequestedFunds` + `targetBeneficiaries`
-- [ ] Verify `bronze.acaps_severity` has severity scores per country-crisis
-- [ ] Notebook `02_silver_crisis_spine.py` — crisis spine with ACAPS severity + HRP flag + funding gap
-- [ ] Notebook `03_silver_projects.py` — project-level B2B ratios computed
-- [ ] Notebook `04_gold_crisis_summary.py` — max 8 crises per country, B2B aggregates attached
-- [ ] Notebook `05_gold_project_b2b.py` — per-project percentile ranks + outlier flags
-- [ ] Notebook `06_gold_embeddings.py` — Gemini embeddings + Vector Search index created
-- [ ] Notebook `07_gold_cross_reference.py` — legacy data preserved as RAG documents
+- [ ] Notebook `01_crisis_summary.py` — pull ACAPS + HPC plans + FTS flows + HDX needs + project B2B aggregates → write `crisis_summary`
+- [ ] Verify `crisis_summary` has ACAPS severity scores, HRP flags, funding gaps, and B2B averages
+- [ ] Verify max 8 crises per country (crisis_rank filter)
+- [ ] Notebook `02_project_embeddings.py` — pull HPC projects → compute B2B ratios + percentiles + outlier flags → build text blobs → write `project_embeddings`
+- [ ] Create Vector Search index on `project_embeddings`
+- [ ] Verify vector search returns meaningful nearest neighbors
 
 ### Phase 2: Backend Refactor
 
@@ -1027,9 +1158,8 @@ If using `workspace.default.*` (single catalog), prefix table names:
 - [ ] Create `routers/globe.py` with `GET /crises` and `GET /b2b`
 - [ ] Create `routers/benchmark.py` with `POST /benchmark`
 - [ ] Implement `routers/ask.py` with RAG pipeline
-- [ ] Update `data_loader.py` to `startup_check()` (remove bulk load)
 - [ ] Update `main.py` to register new routers, remove mismatch
-- [ ] Keep `routers/countries.py` as legacy cross-reference endpoint
+- [ ] Keep `data_loader.py` loading legacy tables for `/api/countries`
 - [ ] Remove `mismatch.py`, `mismatch_engine.py`, `compare.py`
 
 ### Phase 3: Frontend Build
@@ -1042,7 +1172,6 @@ If using `workspace.default.*` (single catalog), prefix table names:
 - [ ] Build `VolcanoTooltip.tsx` for hover interactions
 - [ ] Build `CountryDrawer.tsx` with B2B breakdown chart
 - [ ] Build `SidePanel.tsx` with year selector (2022–2026) and filters
-- [ ] Build `YearSelector.tsx` component
 - [ ] Wire up click → `/api/globe/b2b` → drawer flow
 
 ### Phase 4: ElevenLabs Integration
@@ -1056,8 +1185,8 @@ If using `workspace.default.*` (single catalog), prefix table names:
 
 ### Phase 5: End-to-End Validation
 
-- [ ] Query `gold.crisis_summary` from frontend, verify volcano rendering
-- [ ] Click country → verify B2B detail loads
+- [ ] Query `crisis_summary` from frontend, verify volcano rendering
+- [ ] Click country → verify B2B detail loads from `project_embeddings`
 - [ ] Run benchmark query → verify nearest neighbors + B2B deltas
 - [ ] Ask ElevenLabs "Which crises lack HRP plans?" → verify RAG answer
 - [ ] Verify year filter (2022–2026) works across all endpoints
