@@ -9,7 +9,7 @@ const AGENT_ID = process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID || "agent_1201khzd2
 export function VoiceAgent() {
     const [isSpacePressed, setIsSpacePressed] = useState(false);
     const [hasStarted, setHasStarted] = useState(false);
-    const { setFlyToCoordinates } = useGlobeContext();
+    const { setFlyToCoordinates, setComparisonData } = useGlobeContext();
 
     // We pass micMuted dynamic state directly to the hook
     const conversation = useConversation({
@@ -31,9 +31,46 @@ export function VoiceAgent() {
                     altitude: 1.5
                 });
                 return "Successfully moved the globe.";
+            },
+            compare_countries: (parameters: {
+                sourceIso: string; targetIso: string;
+                sourceLat: number; sourceLng: number;
+                targetLat: number; targetLng: number;
+                sourceStats: { mismatch: number; peopleInNeed: number; risk: number; severity: number; gap: number; };
+                targetStats: { mismatch: number; peopleInNeed: number; risk: number; severity: number; gap: number; };
+            }) => {
+                console.log("AI called compare_countries:", parameters);
+                setFlyToCoordinates({
+                    lat: parameters.sourceLat,
+                    lng: parameters.sourceLng,
+                    altitude: 2.0
+                });
+                setComparisonData({
+                    sourceIso: parameters.sourceIso,
+                    targetIso: parameters.targetIso,
+                    sourceLat: parameters.sourceLat,
+                    sourceLng: parameters.sourceLng,
+                    targetLat: parameters.targetLat,
+                    targetLng: parameters.targetLng,
+                    sourceStats: parameters.sourceStats,
+                    targetStats: parameters.targetStats
+                });
+                return "Successfully compared the countries. The user can now see the visualization.";
+            },
+            end_conversation: (parameters: {}) => {
+                console.log("AI called end_conversation:", parameters);
+                // We'll set hasStarted to false to reset UI, and rely on the useEffect below to actually end the session
+                setHasStarted(false);
+                return "Conversation ended.";
             }
         }
     });
+
+    useEffect(() => {
+        if (!hasStarted && conversation.status === "connected") {
+            conversation.endSession();
+        }
+    }, [hasStarted, conversation]);
 
     const startVoiceSession = useCallback(async () => {
         try {
