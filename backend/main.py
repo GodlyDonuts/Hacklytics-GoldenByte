@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 # Load .env from backend/ when running from project root
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
-from .routers import ask, benchmark, countries, globe
+from .routers import ask, benchmark, countries, genie, globe
 from .services.data_loader import load_all_data
 
 
@@ -31,3 +31,4 @@ app.include_router(globe.router, prefix="/api/globe")
 app.include_router(benchmark.router, prefix="/api")
 app.include_router(ask.router, prefix="/api")
 app.include_router(countries.router, prefix="/api")
+app.include_router(genie.router, prefix="/api")
