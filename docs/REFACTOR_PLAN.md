@@ -230,7 +230,7 @@ This single notebook ingests from a CSV (or ACAPS API), joins with funding/needs
 | `funding_usd` | DECIMAL | Total funding received (NULL if no appeal) |
 | `funding_gap_usd` | DECIMAL | `requirements_usd - funding_usd` |
 | `funding_coverage_pct` | FLOAT | `funding_usd / requirements_usd` (NULL if no appeal) |
-| `avg_b2b_ratio` | FLOAT | Average B2B ratio across projects (NULL if no projects) |
+| `b2b_ratio` | FLOAT | B2B ratio (people_in_need / funding_usd) *if funding_usd is null, b2b ratio is set to 0. |
 | `median_b2b_ratio` | FLOAT | Median B2B ratio (NULL if no projects) |
 | `project_count` | INT | Number of HRP projects (0 if none) |
 | `crisis_rank` | INT | Rank within country by severity (1 = worst), **capped at 8** |
