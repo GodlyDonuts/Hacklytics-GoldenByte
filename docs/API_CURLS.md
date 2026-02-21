@@ -20,28 +20,35 @@ uvicorn backend.main:app --reload --port 8000
 
 ### 1. GET `/api/globe/crises`
 
-Returns volcano data for the globe. Queries `crisis_summary` on demand.
+Returns volcano data for the globe. Queries `crisis_summary` on demand. **Month-based** for a simpler, less cluttered view.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `year` | int | 2024 | Filter by year (2022–2026) |
+| `month` | int | (none) | Filter to specific month (1–12); omit for full year |
 
 **Status:** ✅ Implemented
 
 ```bash
+# One month (recommended — simpler view)
+curl -X GET "http://localhost:8000/api/globe/crises?year=2024&month=2"
+```
+
+```bash
+# Full year (all 12 months)
 curl -X GET "http://localhost:8000/api/globe/crises?year=2024"
 ```
 
-With explicit year:
-
 ```bash
-curl -X GET "http://localhost:8000/api/globe/crises?year=2023"
+curl -X GET "http://localhost:8000/api/globe/crises?year=2023&month=6"
 ```
 
 **Example response:**
 ```json
 {
   "year": 2024,
+  "month": 2,
+  "year_month": "2024-02",
   "countries": [
     {
       "iso3": "SDN",
@@ -293,4 +300,4 @@ curl -X GET "http://localhost:8000/openapi.json"
 
 - **CORS:** Allowed origin is `http://localhost:3000` for frontend dev.
 - **Data loading:** On startup, the app verifies Databricks connectivity and loads legacy tables for `/api/countries`. Globe endpoints query `crisis_summary` and `project_embeddings` on demand.
-- **Databricks tables:** New endpoints require `workspace.default.crisis_summary` and `workspace.default.project_embeddings` (and vector index `project_embeddings_index` for `/api/benchmark` and `/api/ask`). Run the Databricks notebooks from REFACTOR_PLAN.md to populate these tables.
+- **Databricks tables:** New endpoints require `workspace.default.crisis_summary` (with `year`, `month` columns) and `workspace.default.project_embeddings` (and vector index `project_embeddings_index` for `/api/benchmark` and `/api/ask`). Run the Databricks notebooks from REFACTOR_PLAN.md to populate these tables. ACAPS crisis data is ingested from CSV (48 months 2022–2026).

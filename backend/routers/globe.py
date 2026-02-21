@@ -12,12 +12,21 @@ from ..services.databricks_client import execute_sql
 router = APIRouter()
 
 VALID_YEARS = range(2022, 2027)
+VALID_MONTHS = range(1, 13)
 
 
 def _validate_year(year: int) -> int:
     if year not in VALID_YEARS:
         raise HTTPException(400, f"year must be 2022–2026, got {year}")
     return year
+
+
+def _validate_month(month: int | None) -> int | None:
+    if month is None:
+        return None
+    if month not in VALID_MONTHS:
+        raise HTTPException(400, f"month must be 1–12, got {month}")
+    return month
 
 
 def _validate_iso3(iso3: str) -> str:
@@ -28,12 +37,22 @@ def _validate_iso3(iso3: str) -> str:
 
 
 @router.get("/crises")
-async def get_globe_crises(year: int = Query(2024, ge=2022, le=2026)):
-    """Volcano data for the globe. Queries crisis_summary on demand."""
+async def get_globe_crises(
+    year: int = Query(2024, ge=2022, le=2026),
+    month: int | None = Query(None, ge=1, le=12, description="Filter to specific month (1–12); omit for full year"),
+):
+    """Volcano data for the globe. Queries crisis_summary on demand. Month-based for simpler view."""
     year = _validate_year(year)
+    month = _validate_month(month)
+
+    if month is not None:
+        where_clause = f"WHERE year = {year} AND month = {month}"
+    else:
+        where_clause = f"WHERE year = {year}"
+
     try:
         rows = await execute_sql(
-            f"SELECT * FROM workspace.default.crisis_summary WHERE year = {year} ORDER BY iso3, crisis_rank"
+            f"SELECT * FROM workspace.default.crisis_summary {where_clause} ORDER BY iso3, crisis_rank"
         )
     except RuntimeError as e:
         raise HTTPException(502, f"Databricks error: {e}") from e
@@ -77,7 +96,13 @@ async def get_globe_crises(year: int = Query(2024, ge=2022, le=2026)):
             "crises": by_country.get(iso3, []),
         })
 
-    return {"year": year, "countries": countries}
+    year_month = f"{year}-{month:02d}" if month is not None else f"{year}"
+    return {
+        "year": year,
+        "month": month,
+        "year_month": year_month,
+        "countries": countries,
+    }
 
 
 @router.get("/b2b")
