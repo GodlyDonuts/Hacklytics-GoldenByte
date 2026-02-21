@@ -75,6 +75,7 @@ print(f"Wrote {plans_sdf.count()} rows to workspace.default.plans")
 
 all_funding = []
 offset = 0
+PAGE = 10000
 
 while True:
     print(f"Fetching funding data (offset={offset})...")
@@ -82,8 +83,9 @@ while True:
         f"{HDX_BASE}/coordination-context/funding",
         params={
             "app_identifier": APP_ID,
-            "limit": 1000,
+            "limit": PAGE,
             "offset": offset,
+            "reference_period_start_min": "2020-01-01",
         },
         timeout=60,
     )
@@ -98,7 +100,7 @@ while True:
 
     all_funding.extend(data)
     print(f"  -> Got {len(data)} records (total: {len(all_funding)})")
-    offset += 1000
+    offset += PAGE
     time.sleep(0.3)
 
 print(f"\nTotal funding records: {len(all_funding)}")
@@ -122,13 +124,18 @@ else:
 
 all_needs = []
 offset = 0
-page_limit = 1000
+PAGE = 10000
 
 while True:
     print(f"Fetching humanitarian needs (offset={offset})...")
     resp = requests.get(
         f"{HDX_BASE}/affected-people/humanitarian-needs",
-        params={"app_identifier": APP_ID, "limit": page_limit, "offset": offset},
+        params={
+            "app_identifier": APP_ID,
+            "limit": PAGE,
+            "offset": offset,
+            "reference_period_start_min": "2020-01-01",
+        },
         timeout=60,
     )
     if not resp.ok:
@@ -142,7 +149,7 @@ while True:
 
     all_needs.extend(data)
     print(f"  -> Got {len(data)} records (total: {len(all_needs)})")
-    offset += page_limit
+    offset += PAGE
     time.sleep(0.3)
 
 print(f"\nTotal humanitarian needs records: {len(all_needs)}")
@@ -168,12 +175,18 @@ else:
 
 all_pop = []
 offset = 0
+PAGE = 10000
 
 while True:
     print(f"Fetching population data (offset={offset})...")
     resp = requests.get(
-        f"{HDX_BASE}/population-social/population",
-        params={"app_identifier": APP_ID, "limit": 1000, "offset": offset},
+        f"{HDX_BASE}/geography-infrastructure/baseline-population",
+        params={
+            "app_identifier": APP_ID,
+            "limit": PAGE,
+            "offset": offset,
+            "reference_period_start_min": "2020-01-01",
+        },
         timeout=60,
     )
     if not resp.ok:
@@ -187,7 +200,7 @@ while True:
 
     all_pop.extend(data)
     print(f"  -> Got {len(data)} records (total: {len(all_pop)})")
-    offset += 1000
+    offset += PAGE
     time.sleep(0.3)
 
 print(f"\nTotal population records: {len(all_pop)}")
