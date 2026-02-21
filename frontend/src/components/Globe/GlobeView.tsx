@@ -1,33 +1,113 @@
 "use client";
 
-import React, { useState, useMemo, useEffect, useRef } from "react";
-import Globe, { GlobeInstance } from "globe.gl";
-import GlobeControls from "./GlobeControls";
-import { useGlobeContext } from "@/context/GlobeContext";
-import * as THREE from 'three';
+/**
+ * GlobeView.tsx
+ *
+ * Main 3D globe component. It:
+ * - Fetches crisis data from the API (lib/api.ts getGlobeCrises) using year/month from GlobeContext.
+ * - Renders a globe.gl instance with: country outlines (GeoJSON), hex bin “bars” (from that data),
+ *   an optional floating HTML label for a selected country, and optional comparison arcs.
+ * - Listens to GlobeContext for: filters (year, month), viewMode (severity | funding-gap | anomalies),
+ *   flyToCoordinates (camera), and comparisonData (arc source/target).
+ * - Data flow: API → data (GlobeCountry[]) → hexBinPointsData (HexPoint[]) → hex layer; selectedPoint
+ *   and comparisonData drive the label and arcs.
+ */
 
+// -----------------------------------------------------------------------------
+// IMPORTS
+// -----------------------------------------------------------------------------
+// React hooks for state, memoization, effects, and DOM refs
+import React, { useState, useMemo, useEffect, useRef } from "react";
+// 3D globe library: Globe = constructor, GlobeInstance = type for the globe instance
+import Globe, { GlobeInstance } from "globe.gl";
+// Child components: camera/controls overlay and filter modal
+import GlobeControls from "./GlobeControls";
+import DataFiltersModal from "./DataFiltersModal";
+// Global state: selected country, fly-to target, comparison arcs, view mode, filters
+import { useGlobeContext } from "@/context/GlobeContext";
+// API: fetches crisis data by year/month; GlobeCountry = shape of each country in the response
 import { getGlobeCrises, GlobeCountry } from "@/lib/api";
 
-export default function GlobeView() {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const globeRef = useRef<GlobeInstance | null>(null);
-  const [selectedPoint, setSelectedPoint] = useState<GlobeCountry | null>(null);
-  const { selectedCountry, setSelectedCountry, flyToCoordinates, comparisonData, viewMode, filters } = useGlobeContext();
-  const [data, setData] = useState<GlobeCountry[]>([]);
+// -----------------------------------------------------------------------------
+// SEVERITY → COLOR MAPPING (used for hex bin bars and altitude)
+// -----------------------------------------------------------------------------
+// Maps severity band 1–5 to hex colors; used for both bar color and bar height
+const SEVERITY_COLORS: Record<number, string> = {
+  1: "#3b82f6", // blue   (lowest)
+  2: "#22c55e", // green
+  3: "#eab308", // yellow
+  4: "#f97316", // orange
+  5: "#ef4444", // red    (highest)
+};
 
+/** Clamps severity to 1–5 and returns the corresponding color from SEVERITY_COLORS. */
+function severityColor(severityBand: number): string {
+  const band = Math.min(5, Math.max(1, Math.round(severityBand)));
+  return SEVERITY_COLORS[band] ?? SEVERITY_COLORS[1];
+}
+
+/**
+ * From a hex bin’s aggregated data, returns a severity band 1–5 for color/altitude.
+ * - If the bin has points: uses average severity of those points.
+ * - Otherwise: approximates from sumWeight (used when globe.gl merges bins).
+ */
+function getSeverityBand(d: { points?: unknown[]; sumWeight: number }): number {
+  const points = (d.points || []) as HexPoint[];
+  if (points.length > 0) {
+    const avg = points.reduce((s, p) => s + p.severity, 0) / points.length;
+    return Math.min(5, Math.max(1, Math.round(avg)));
+  }
+  const approxSeverity = 1 + Math.min(4, d.sumWeight);
+  return Math.min(5, Math.max(1, Math.round(approxSeverity)));
+}
+
+/**
+ * Shape of one “point” fed to the hex bin layer. Built from GlobeCountry in useMemo below.
+ * - lat, lng: position on globe
+ * - pop: weight for binning (value depends on viewMode: severity, funding-gap, or anomalies)
+ * - iso: country ISO3 code
+ * - severity, fundingGap, anomalyScore: used for tooltips and for getSeverityBand when bins merge
+ */
+export type HexPoint = { lat: number; lng: number; pop: number; iso: string; severity: number; fundingGap: number; anomalyScore: number };
+
+// -----------------------------------------------------------------------------
+// GLOBE VIEW COMPONENT
+// -----------------------------------------------------------------------------
+export default function GlobeView() {
+  // Refs
+  const containerRef = useRef<HTMLDivElement>(null);   // DOM node that holds the canvas
+  const globeRef = useRef<GlobeInstance | null>(null); // globe.gl instance for layers and camera
+
+  // Local state
+  const [selectedPoint, setSelectedPoint] = useState<GlobeCountry | null>(null); // Country used for the floating HTML label
+  const [filtersOpen, setFiltersOpen] = useState(false);                           // Whether DataFiltersModal is open
+  const [data, setData] = useState<GlobeCountry[]>([]);                            // Raw API response: list of countries with crises
+
+  // From GlobeContext (see context/GlobeContext.tsx): drives fly-to, arcs, view mode, and filters
+  const { selectedCountry, setSelectedCountry, flyToCoordinates, comparisonData, viewMode, filters } = useGlobeContext();
+
+  // -------------------------------------------------------------------------
+  // DATA FETCH: load crisis data when year/month filters change
+  // -------------------------------------------------------------------------
+  // Source: getGlobeCrises(year, month?) in lib/api.ts → returns { countries: GlobeCountry[] }
+  // Receives: filters.year, filters.month from GlobeContext
   useEffect(() => {
-    // Only fetch if a year filter exists
     if (!filters.year) return;
 
-    getGlobeCrises(filters.year)
+    getGlobeCrises(filters.year, filters.month)
       .then((res) => {
         if (res && res.countries) {
           setData(res.countries);
         }
       })
       .catch((err) => console.error("Failed to load globe crises data:", err));
-  }, [filters.year]);
+  }, [filters.year, filters.month]);
 
+  // -------------------------------------------------------------------------
+  // GLOBE INIT: create globe instance once, size to container, cleanup on unmount
+  // -------------------------------------------------------------------------
+  // Runs once on mount. Creates the 3D globe inside containerRef, sets textures and dimensions,
+  // wires ResizeObserver so the globe resizes with the container.
   useEffect(() => {
     if (!containerRef.current) return;
 
@@ -39,185 +119,116 @@ export default function GlobeView() {
 
     globeRef.current = globe;
 
-    return () => { globe._destructor?.(); };
+    const onResize = () => {
+      if (!containerRef.current || !globeRef.current) return;
+      globeRef.current.width(containerRef.current.clientWidth);
+      globeRef.current.height(containerRef.current.clientHeight);
+    };
+    const ro = new ResizeObserver(onResize);
+    ro.observe(containerRef.current);
+
+    return () => {
+      ro.disconnect();
+      globe._destructor?.();
+    };
   }, []);
 
-  const conesData = useMemo(() => {
-    let crisesList: any[] = [];
-    data.forEach((country) => {
-      const crises = country.crises || [];
-      const count = crises.length;
-      if (count === 0) return;
+  // -------------------------------------------------------------------------
+  // HEX BIN INPUT: convert API countries → flat array of HexPoints for the hex layer
+  // -------------------------------------------------------------------------
+  // Input: `data` (GlobeCountry[] from API), `viewMode` from GlobeContext.
+  // Each GlobeCountry has: lat, lng, iso3, country_name, crises[] (each crisis has acaps_severity, funding_gap_usd, people_in_need, avg_b2b_ratio).
+  // Output: one HexPoint per country. `pop` is the “weight” used for binning and varies by viewMode.
+  const hexBinPointsData = useMemo((): HexPoint[] => {
+    return data.map((country) => {
+      let totalSeverity = 0;
+      let totalFundingGap = 0;
+      let totalPeopleInNeed = 0;
+      let sumB2B = 0;
+      let count = 0;
 
-      if (viewMode === 'funding-gap') {
-        let totalFundingGap = 0;
-        crises.forEach(c => totalFundingGap += c.funding_gap_usd || 0);
-        let weight = Math.min(totalFundingGap / 1_000_000_000, 1.0);
+      country.crises?.forEach((crisis) => {
+        totalSeverity += crisis.acaps_severity || 0;
+        totalFundingGap += crisis.funding_gap_usd || 0;
+        totalPeopleInNeed += crisis.people_in_need || 0;
+        sumB2B += crisis.b2b_ratio || 0;
+        count += 1;
+      });
 
-        crisesList.push({
-          lat: country.lat,
-          lng: country.lng,
-          weight: Math.max(weight, 0.05),
-          color: '#ffaa00', // orange
-          iso: country.iso3,
-          tiltAngle: 0,
-          tiltDirection: 0,
-          country,
-          crisis: crises[0]
-        });
-        return;
+      const avgSeverity = count > 0 ? totalSeverity / count : 0;
+      const fundingGap = totalFundingGap;
+      const avgB2B = count > 0 ? sumB2B / count : 0;
+
+      // `pop` = weight for hex bin aggregation. Which metric is used depends on viewMode from context.
+      let pop = 0;
+      if (count > 0) {
+        if (viewMode === "severity") {
+          pop = avgSeverity;
+        } else if (viewMode === "funding-gap") {
+          pop = Math.min(totalFundingGap / 1_000_000_000, 1.0);
+        } else if (viewMode === "anomalies") {
+          pop = Math.min(avgB2B / 100, 1.0);
+        }
       }
 
-      crises.forEach((crisis, index) => {
-        let weight = 0;
-        let color = '#ff0000';
-
-        if (viewMode === 'severity') {
-          const severity = crisis.acaps_severity || 1; // Map 1 to 5 scale
-
-          if (severity >= 5) {
-            weight = 1.5;      // Very tall height (22.5)
-            color = '#8b0000'; // dark blood red
-          } else if (severity === 4) {
-            weight = 1.0;      // Tall height (15.0)
-            color = '#cc0000'; // red
-          } else if (severity === 3) {
-            weight = 0.6;      // Medium height (9.0)
-            color = '#ff6600'; // orange
-          } else if (severity === 2) {
-            weight = 0.3;      // Short height (4.5)
-            color = '#ffcc00'; // bright yellow
-          } else {
-            weight = 0.1;      // Very short height (1.5)
-            color = '#fbff00'; // weak yellow
-          }
-        } else if (viewMode === 'anomalies') {
-          let sumB2B = crisis.b2b_ratio || 0;
-          weight = Math.min(sumB2B / 100, 1.0);
-          color = '#ffff00'; // yellow
-        }
-
-        let finalLat = country.lat;
-        let finalLng = country.lng;
-
-        if (count > 1) {
-          // Instead of purely tilting them from identical origins, 
-          // we spread their base locations slightly (like a flower)
-          // 0.5 degrees of lat/lng shift by default
-          let radius = 1.2;
-
-          // Adjust radius based on country size heuristics
-          // Since we don't have land area from the API, we can target known small countries
-          // that typically have crisis data: e.g. PSE (Palestine), HTI (Haiti), LBN (Lebanon), 
-          // RWA (Rwanda), BDI (Burundi), SLV (El Salvador)
-          const smallIsoCodes = ['PSE', 'HTI', 'LBN', 'RWA', 'BDI', 'SLV', 'HND', 'GTM'];
-          if (smallIsoCodes.includes(country.iso3)) {
-            radius = 0.4; // Significantly smaller spread for tiny countries
-          }
-
-          const angle = (index * Math.PI * 2) / count;
-          finalLat += radius * Math.cos(angle);
-          finalLng += radius * Math.sin(angle);
-        }
-
-        crisesList.push({
-          lat: finalLat,
-          lng: finalLng,
-          weight: Math.max(weight, 0.05), // min visual weight
-          color,
-          iso: country.iso3,
-          tiltAngle: 0, // No longer need explicit tilt if we spread the bases
-          tiltDirection: 0,
-          country,
-          crisis
-        });
-      });
+      return {
+        lat: country.lat,
+        lng: country.lng,
+        pop,
+        iso: country.iso3,
+        severity: avgSeverity,
+        fundingGap,
+        anomalyScore: avgB2B,
+      };
     });
-    return crisesList;
   }, [data, viewMode]);
 
+  // -------------------------------------------------------------------------
+  // GLOBE LAYERS: polygons (country borders), hex bins, HTML label, comparison arcs
+  // -------------------------------------------------------------------------
+  // Runs when data, hexBinPointsData, selectedPoint, comparisonData, or viewMode change.
+  // All layer data is received from: (1) API → data, (2) derived hexBinPointsData, (3) GlobeContext (comparisonData), (4) local selectedPoint.
   useEffect(() => {
     if (!globeRef.current || !data.length) return;
     const globe = globeRef.current;
 
+    // --- Country outlines (GeoJSON) ---
+    // Fetched from external URL once; draws transparent polygons with white borders on the globe.
     fetch('https://raw.githubusercontent.com/vasturiano/globe.gl/master/example/datasets/ne_110m_admin_0_countries.geojson').then(res => res.json()).then(countries => {
       globe
         .polygonsData(countries.features)
-        .polygonCapColor(() => 'rgba(0, 0, 0, 0)') // Transparent surface
-        .polygonSideColor(() => 'rgba(255, 255, 255, 0.1)') // Transparent sides
-        .polygonStrokeColor(() => '#ffffff')      // White border lines
-        .polygonAltitude(0.01)                     // Slightly above globe surface
-      // .globeImageUrl('//unpkg.com/three-globe/example/img/earth-dark.jpg');
+        .polygonCapColor(() => 'rgba(0, 0, 0, 0)')
+        .polygonSideColor(() => 'rgba(255, 255, 255, 0.1)')
+        .polygonStrokeColor(() => '#ffffff')
+        .polygonAltitude(0.01);
     });
 
-    globe.heatmapsData([]); // Clear heatmaps if any
-
+    // --- Hex bin layer (colored bars on the globe) ---
+    // Data source: hexBinPointsData (one HexPoint per country, built from API data + viewMode).
+    // globe.gl bins points by lat/lng, aggregates by "pop" weight; we color/height by severity via getSeverityBand.
     globe
-      .customLayerData(conesData)
-      .customThreeObject((d: any) => {
-        // Create a cone. The weight will determine its height
-        // Scale weight nicely for height
-        const height = d.weight * 15;
-        const geometry = new THREE.ConeGeometry(0.8, height, 16);
+      .heatmapsData([])
+      .hexBinPointsData(hexBinPointsData)
+      .hexBinPointLat("lat")
+      .hexBinPointLng("lng")
+      .hexBinPointWeight("pop")
+      .hexAltitude((d) => (getSeverityBand(d) - 1) * 0.02 + 0.02)  // Bar height from severity 1–5
+      .hexBinResolution(4)
+      .hexTopColor((d) => severityColor(getSeverityBand(d)))
+      .hexSideColor((d) => severityColor(getSeverityBand(d)))
+      .hexBinMerge(true)
+      .enablePointerInteraction(false);
 
-        // Translate center to base so it sticks out of the globe instead of piercing it
-        geometry.translate(0, height / 2, 0);
-
-        const material = new THREE.MeshLambertMaterial({
-          color: d.color,
-          transparent: true,
-          opacity: 0.9
-        });
-
-        const mesh = new THREE.Mesh(geometry, material);
-        return mesh;
-      })
-      .customThreeObjectUpdate((obj: any, d: any) => {
-        // Position object on globe
-        const coords = globeRef.current!.getCoords(d.lat, d.lng, 0.01);
-        Object.assign(obj.position, coords);
-
-        // Orient cone outwardly
-        // Cone points along local +Y axis. We align this +Y axis with the normal from the globe center.
-        const normal = obj.position.clone().normalize();
-
-        // Base orientation: pointing up from the surface
-        const quaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
-
-        // Apply individual tilts to fan them out if multiple
-        if (d.tiltAngle) {
-          // Create a rotation around the local X axis
-          const tiltQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), d.tiltAngle);
-
-          // Create a rotation around the local Y axis to spread them
-          const spreadQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), d.tiltDirection);
-
-          // Combine rotations: first tilt, then spread, then orient to surface normal
-          tiltQuat.premultiply(spreadQuat);
-          tiltQuat.premultiply(quaternion);
-
-          obj.quaternion.copy(tiltQuat);
-        } else {
-          obj.quaternion.copy(quaternion);
-        }
-      })
-      .enablePointerInteraction(true)
-      .onCustomLayerClick((obj, _event, _coords) => {
-        const d = obj as any;
-        if (d && d.iso) {
-          setSelectedCountry(d.iso);
-          setSelectedPoint(d.country);
-        }
-      });
-
+    // --- Floating HTML label (tooltip for selected country) ---
+    // Data source: selectedPoint (GlobeCountry | null). When set, one DOM label is shown at that country’s lat/lng.
+    // Label content: country name, ISO3, crisis count, and “People in Need” from first crisis.
     globe
       .htmlElementsData(selectedPoint ? [selectedPoint] : [])
       .htmlLat((o) => (o as GlobeCountry).lat || 0)
       .htmlLng((o) => (o as GlobeCountry).lng || 0)
-      .htmlAltitude(0.2) // Fixed altitude or calculate based on aggregated severity
+      .htmlAltitude(0.2)
       .htmlElement((obj) => {
         const country = obj as GlobeCountry;
-
         let targetCrisis = country.crises && country.crises.length > 0 ? country.crises[0] : null;
         let pin = targetCrisis ? (targetCrisis.people_in_need / 1_000_000) : 0;
         let pinDisplay = pin > 0 ? `${pin.toFixed(1)}M` : 'Unknown';
@@ -235,7 +246,9 @@ export default function GlobeView() {
         (el as HTMLElement).style.opacity = isVisible ? "1" : "0";
       });
 
-    // Configure Comparison Arcs
+    // --- Comparison arcs (source → target line) ---
+    // Data source: comparisonData from GlobeContext (set elsewhere, e.g. when comparing two countries).
+    // If present, one arc is drawn; otherwise arcs are cleared.
     if (comparisonData) {
       globe
         .arcsData([
@@ -260,9 +273,13 @@ export default function GlobeView() {
     } else {
       globe.arcsData([]);
     }
-  }, [data, conesData, selectedPoint, setSelectedCountry, comparisonData]);
+  }, [data, hexBinPointsData, selectedPoint, setSelectedCountry, comparisonData, viewMode]);
 
-  // Handle flyToCoordinates changes
+  // -------------------------------------------------------------------------
+  // CAMERA: fly to coordinates when GlobeContext updates flyToCoordinates
+  // -------------------------------------------------------------------------
+  // Source: flyToCoordinates from GlobeContext (e.g. set when user picks “fly to” a country).
+  // Animates the globe camera to the given lat/lng/altitude over 2 seconds.
   useEffect(() => {
     if (flyToCoordinates && globeRef.current) {
       globeRef.current.pointOfView(
@@ -271,36 +288,31 @@ export default function GlobeView() {
           lng: flyToCoordinates.lng,
           altitude: flyToCoordinates.altitude ?? 1.5
         },
-        2000 // Transition duration in ms
+        2000
       );
     }
   }, [flyToCoordinates]);
 
+  // -------------------------------------------------------------------------
+  // RENDER: container, globe canvas, selected badge, controls, filters modal
+  // -------------------------------------------------------------------------
   return (
     <div className="relative w-full h-screen">
+      {/* DOM node that globe.gl mounts its canvas into */}
       <div ref={containerRef} className="w-full h-full" />
+      {/* Badge showing currently selected country (from context); only visible when selectedCountry is set */}
       {selectedCountry && (
         <div className="absolute bottom-4 right-4 rounded bg-black/70 px-3 py-2 text-sm text-white">
           Selected: {selectedCountry}
         </div>
       )}
+      {/* Camera controls (e.g. reset view) that need access to the globe instance */}
       <GlobeControls globeRef={globeRef} />
+      {/* Modal for year/month filters; filters are stored in GlobeContext and drive the data fetch above */}
+      <DataFiltersModal
+        open={filtersOpen}
+        onToggle={() => setFiltersOpen((o) => !o)}
+      />
     </div>
   );
-}
-
-function nearestPoint(data: GlobeCountry[], lat: number, lng: number): GlobeCountry {
-  if (data.length === 0) return {} as GlobeCountry;
-  let best = data[0];
-  let bestD = Infinity;
-  for (const country of data) {
-    const plat = country.lat || 0;
-    const plng = country.lng || 0;
-    const d = (plat - lat) ** 2 + (plng - lng) ** 2;
-    if (d < bestD) {
-      bestD = d;
-      best = country;
-    }
-  }
-  return best;
 }

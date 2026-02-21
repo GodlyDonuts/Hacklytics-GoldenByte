@@ -31,8 +31,25 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   }
 
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `API error: ${res.status}`);
+    const text = await res.text();
+    let message = `API error: ${res.status}`;
+    try {
+      const body = text ? JSON.parse(text) : {};
+      const detail = body.detail;
+      if (typeof detail === "string") {
+        message = detail;
+      } else if (Array.isArray(detail) && detail.length > 0) {
+        const first = detail[0];
+        const loc = first.loc ? first.loc.join(".") : "";
+        const msg = first.msg ?? "";
+        message = loc ? `${loc}: ${msg}` : msg;
+      } else if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+        message = String(detail);
+      }
+    } catch {
+      if (text) message = text.slice(0, 200);
+    }
+    throw new Error(message);
   }
 
   return res.json();
