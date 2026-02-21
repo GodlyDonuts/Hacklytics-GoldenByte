@@ -186,6 +186,7 @@ while True:
             "limit": PAGE,
             "offset": offset,
             "reference_period_start_min": "2020-01-01",
+            "admin_level": 0,  # Country-level totals only; avoids loading millions of admin1/admin2 x gender x age rows
         },
         timeout=60,
     )
