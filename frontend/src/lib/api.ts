@@ -227,10 +227,10 @@ export async function queryGenie(
 
 export async function getGlobeCrises(
   year: number = 2024,
-  month?: number
+  month?: number | null
 ): Promise<GlobeCrisesResponse> {
   const params = new URLSearchParams({ year: String(year) });
-  if (month !== undefined) params.set("month", String(month));
+  if (month != null) params.set("month", String(month));
   return apiFetch(`/api/globe/crises?${params}`);
 }
 

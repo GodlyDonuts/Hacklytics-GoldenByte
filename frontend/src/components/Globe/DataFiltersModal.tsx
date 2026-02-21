@@ -112,6 +112,17 @@ export default function DataFiltersModal({ open, onToggle }: DataFiltersModalPro
               Month
             </div>
             <div className="flex flex-wrap gap-1">
+              <button
+                type="button"
+                onClick={() => setFilters((prev) => ({ ...prev, month: null }))}
+                className={`min-w-[2.5rem] rounded px-2 py-1.5 text-xs font-medium transition ${
+                  filters.month === null
+                    ? "bg-[#00d4ff]/20 text-[#00e5ff] shadow-[0_0_8px_rgba(0,212,255,0.3)] border border-[#00d4ff]/50"
+                    : "border border-white/20 bg-white/5 text-white/80 hover:border-[#00d4ff]/40 hover:text-white"
+                }`}
+              >
+                All
+              </button>
               {MONTHS.map((m, i) => {
                 const monthNum = i + 1;
                 const isActive = filters.month === monthNum;
@@ -232,7 +243,7 @@ export default function DataFiltersModal({ open, onToggle }: DataFiltersModalPro
             {/* Footer with current summary */}
             <div className="relative shrink-0 border-t border-[#00d4ff]/30 bg-[#1e2023]/80 px-5 py-3">
               <div className="text-[10px] uppercase tracking-wider text-white/60">
-                Display: {MONTHS[filters.month - 1]} {filters.year}
+                Display: {filters.month ? MONTHS[filters.month - 1] : 'All'} {filters.year}
                 {filters.country && ` · ${filters.country}`}
                 {filters.crisis && ` · ${filters.crisis}`}
                 {filters.funds && ` · ${filters.funds}`}
