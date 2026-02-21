@@ -109,22 +109,69 @@ Two notebooks. Each pulls raw data from APIs, cleans/joins/computes in-memory, a
 
 All API calls are scoped to **2022–2026**.
 
+> **FTS Flows is dead.** The old HPC endpoint (`/v1/public/fts/flow`) stops at Dec 2017. The replacement is the **HDX HAPI Funding endpoint** (`/api/v2/coordination-context/funding`), which is backed by the same OCHA FTS data but exposed through HDX HAPI with current data, proper filtering, and a `has_hrp` flag built in. This is also the dataset behind [Global Requirements and Funding Data on HDX](https://data.humdata.org/dataset/global-requirements-and-funding-data).
+
 | Source | Endpoint | Year Filter Strategy |
 |---|---|---|
 | HPC Plans | `/v1/public/plan/year/{y}` | Loop y = 2022..2026 |
 | HPC Projects | `/v1/public/project/plan/{planId}` | Derived from plans within 2022–2026 |
-| HPC FTS Flows | `/v1/public/fts/flow?year={y}` | Query param `year=2022..2026` |
+| **HDX HAPI Funding** | `GET /api/v2/coordination-context/funding` | `start_date=2022-01-01&end_date=2026-12-31`, paginate with `limit=10000&offset=N` |
 | HDX Humanitarian Needs | `/v2/affected-people/humanitarian-needs` | Filter `reference_period_start` >= 2022-01-01 |
 | HDX Population | `/v2/geography-infrastructure/baseline-population` | Take latest available |
 | ACAPS Severity | ACAPS Inform Severity Index API | Filter response by date >= 2022-01-01 |
 
-### 3.3 Table 1: `crisis_summary`
+#### HDX HAPI Funding Endpoint — Detail
+
+**Endpoint:** `GET https://hapi.humdata.org/api/v2/coordination-context/funding`
+
+**Key columns returned:**
+
+| Column | Type | Why It Matters |
+|---|---|---|
+| `location_code` | STRING | ISO3 country code (join key) |
+| `location_name` | STRING | Country name |
+| `appeal_code` | STRING | Unique FTS appeal identifier |
+| `appeal_name` | STRING | Appeal display name |
+| `appeal_type` | STRING | **Critical** — `"HRP"`, `"Flash"`, `"Regional"`, `"Other"`, etc. This tells you what kind of response exists. |
+| `requirements_usd` | DECIMAL | How much was requested |
+| `funding_usd` | DECIMAL | How much was actually received |
+| `funding_pct` | FLOAT | Pre-computed `funding_usd / requirements_usd` |
+| `reference_period_start` | DATETIME | Start of appeal period (used for year filtering) |
+| `reference_period_end` | DATETIME | End of appeal period |
+
+**Key query parameters for filtering:**
+
+| Param | Use |
+|---|---|
+| `start_date` / `end_date` | Restrict to 2022–2026 |
+| `has_hrp=true` | Only return countries WITH an HRP |
+| `has_hrp=false` | Only return countries WITHOUT an HRP (for invisible crisis detection) |
+| `location_code` | Filter to specific country |
+| `appeal_type` | Filter by appeal type (HRP, Flash, etc.) |
+
+**Important caveat from docs:** *"The present version of the API currently captures only funding associated with an appeal."* Crises with zero formal appeals are genuinely invisible — no funding row exists at all. This is actually useful: if ACAPS flags a crisis but there's no funding row, that's an invisible crisis.
+
+### 3.3 Three Crisis Funding States
+
+This is the core analytical model the Databricks notebooks must produce. Every crisis in `crisis_summary` is classified into one of three states:
+
+| State | Label | Detection Logic | Globe Signal |
+|---|---|---|---|
+| **Invisible** | `NO_HRP` | ACAPS severity exists for this country-year, but no matching funding row with `appeal_type = "HRP"` exists in HDX HAPI. No coordinated response. | Volcano bar with **no B2B line** (no projects to measure). Bar is outlined/dashed to visually distinguish. |
+| **Underfunded** | `UNDERFUNDED` | HRP exists (`appeal_type = "HRP"`), but `funding_coverage_pct < 0.50` (less than 50% of requirements met). The gap is large. | Volcano bar with **red B2B line** positioned low. |
+| **Inefficient** | `INEFFICIENT` | HRP exists and is reasonably funded (`funding_coverage_pct >= 0.50`), but the median B2B ratio across projects is below the global 25th percentile — money flows in but doesn't reach proportionate beneficiaries. | Volcano bar with **orange B2B line** — funded but poorly allocated. |
+
+A fourth implicit state is "Adequately Funded" where HRP exists, coverage > 50%, and B2B ratios are within normal range — these get a **green B2B line**.
+
+The classification is stored as `funding_state` in the `crisis_summary` table.
+
+### 3.4 Table 1: `crisis_summary`
 
 **Drives the globe volcanoes.** One row per crisis per country per year, capped at 8 crises per country.
 
 **Notebook: `01_crisis_summary.py`**
 
-This single notebook ingests from 4 API sources, joins everything, and writes the final table.
+This single notebook ingests from APIs, joins everything, classifies each crisis into a funding state, and writes the final table.
 
 #### Schema
 
@@ -139,15 +186,18 @@ This single notebook ingests from 4 API sources, joins everything, and writes th
 | `crisis_name` | STRING | Crisis display name |
 | `acaps_severity` | FLOAT | Severity score (0–5), drives volcano bar height |
 | `severity_class` | STRING | `Very Low` / `Low` / `Medium` / `High` / `Very High` |
-| `has_hrp` | BOOLEAN | Whether an HRP plan exists for this country-year |
+| `has_hrp` | BOOLEAN | Whether an HRP appeal exists for this country-year |
+| `appeal_type` | STRING | From HDX HAPI: `"HRP"`, `"Flash"`, `"Regional"`, `"Other"`, or `NULL` if no appeal |
+| `appeal_code` | STRING | FTS appeal identifier (NULL if no appeal) |
+| `funding_state` | STRING | **`NO_HRP`** / **`UNDERFUNDED`** / **`INEFFICIENT`** / **`ADEQUATE`** (see Section 3.3) |
 | `people_in_need` | BIGINT | PIN for this country-year |
-| `requirements_usd` | DECIMAL | Total funding requested |
-| `funding_usd` | DECIMAL | Total funding received |
+| `requirements_usd` | DECIMAL | Total funding requested (NULL if no appeal) |
+| `funding_usd` | DECIMAL | Total funding received (NULL if no appeal) |
 | `funding_gap_usd` | DECIMAL | `requirements_usd - funding_usd` |
-| `funding_coverage_pct` | FLOAT | `funding_usd / requirements_usd` |
-| `avg_b2b_ratio` | FLOAT | Average B2B ratio across projects in this crisis |
-| `median_b2b_ratio` | FLOAT | Median B2B ratio |
-| `project_count` | INT | Number of HRP projects |
+| `funding_coverage_pct` | FLOAT | `funding_usd / requirements_usd` (NULL if no appeal) |
+| `avg_b2b_ratio` | FLOAT | Average B2B ratio across projects (NULL if no projects) |
+| `median_b2b_ratio` | FLOAT | Median B2B ratio (NULL if no projects) |
+| `project_count` | INT | Number of HRP projects (0 if none) |
 | `crisis_rank` | INT | Rank within country by severity (1 = worst), **capped at 8** |
 
 #### Notebook Logic
@@ -157,11 +207,13 @@ This single notebook ingests from 4 API sources, joins everything, and writes th
 
 import requests
 import pandas as pd
-from datetime import datetime
+import numpy as np
+import base64
 
 HPC_BASE = "https://api.hpc.tools/v1/public"
 HDX_BASE = "https://hapi.humdata.org/api/v2"
 ACAPS_URL = "https://api.acaps.org/api/v1/inform-severity-index/"
+APP_ID = base64.b64encode(b"CrisisTopography:team@hacklytics.com").decode()
 YEARS = range(2022, 2027)
 
 # ── Step 1: Pull ACAPS severity (the spine) ──
@@ -169,41 +221,87 @@ acaps_resp = requests.get(ACAPS_URL, params={"format": "json", "limit": 2000})
 acaps_raw = acaps_resp.json().get("results", [])
 acaps_df = pd.DataFrame(acaps_raw)
 # Filter to 2022–2026, extract: iso3, crisis_id, crisis_name, severity, year
-# Derive severity_class from score thresholds
+# Derive severity_class from score thresholds:
+#   0–1 = Very Low, 1–2 = Low, 2–3 = Medium, 3–4 = High, 4–5 = Very High
 
-# ── Step 2: Pull HRP plans (for has_hrp flag) ──
+# ── Step 2: Pull HRP plans (for plan IDs needed in Step 5) ──
 all_plans = []
 for y in YEARS:
     resp = requests.get(f"{HPC_BASE}/plan/year/{y}")
     if resp.ok:
         for p in resp.json().get("data", []):
-            # Extract plan country ISO3 + year
-            all_plans.append(...)
+            all_plans.append({
+                "plan_id": p["id"],
+                "year": y,
+                "iso3": ...,  # extract from plan locations
+                "country_name": ...,
+            })
 plans_df = pd.DataFrame(all_plans)
 
-# ── Step 3: Pull FTS funding flows ──
-all_flows = []
-for y in YEARS:
-    resp = requests.get(f"{HPC_BASE}/fts/flow", params={"year": y, "groupby": "Country"})
-    if resp.ok:
-        # Extract country ISO3, funding_usd, requirements_usd per country per year
-        ...
-flows_df = pd.DataFrame(all_flows)
+# ── Step 3: Pull HDX HAPI Funding (replaces dead FTS flows endpoint) ──
+# This is the OCHA FTS requirements & funding data served through HDX HAPI.
+# Key: appeal_type tells us if an HRP exists. has_hrp is also a filter param.
+all_funding = []
+offset = 0
+while True:
+    resp = requests.get(
+        f"{HDX_BASE}/coordination-context/funding",
+        params={
+            "app_identifier": APP_ID,
+            "start_date": "2022-01-01",
+            "end_date": "2026-12-31",
+            "limit": 10000,
+            "offset": offset,
+        },
+    )
+    data = resp.json().get("data", [])
+    if not data:
+        break
+    all_funding.extend(data)
+    offset += len(data)
+
+funding_df = pd.DataFrame(all_funding)
+# Columns: location_code, location_name, appeal_code, appeal_name,
+#           appeal_type, requirements_usd, funding_usd, funding_pct,
+#           reference_period_start, reference_period_end
+#
+# Extract year from reference_period_start
+funding_df["year"] = pd.to_datetime(funding_df["reference_period_start"]).dt.year
+
+# Determine has_hrp: True if any row for this location+year has appeal_type == "HRP"
+hrp_flags = (
+    funding_df[funding_df["appeal_type"] == "HRP"]
+    .groupby(["location_code", "year"])
+    .agg(
+        has_hrp=("appeal_type", lambda x: True),
+        appeal_code=("appeal_code", "first"),
+        appeal_type=("appeal_type", "first"),
+        requirements_usd=("requirements_usd", "sum"),
+        funding_usd=("funding_usd", "sum"),
+    )
+    .reset_index()
+)
+hrp_flags["funding_coverage_pct"] = (
+    hrp_flags["funding_usd"] / hrp_flags["requirements_usd"].replace(0, np.nan)
+)
+hrp_flags["funding_gap_usd"] = hrp_flags["requirements_usd"] - hrp_flags["funding_usd"]
 
 # ── Step 4: Pull humanitarian needs ──
 all_needs = []
 offset = 0
 while True:
-    resp = requests.get(f"{HDX_BASE}/affected-people/humanitarian-needs",
-                        params={"app_identifier": APP_ID, "limit": 1000, "offset": offset})
+    resp = requests.get(
+        f"{HDX_BASE}/affected-people/humanitarian-needs",
+        params={"app_identifier": APP_ID, "limit": 10000, "offset": offset},
+    )
     data = resp.json().get("data", [])
     if not data:
         break
     all_needs.extend(data)
-    offset += 1000
+    offset += len(data)
+
 needs_df = pd.DataFrame(all_needs)
-# Filter to 2022–2026 via reference_period_start
-# Aggregate people_in_need by country-year
+# Filter to 2022–2026, aggregate people_in_need (population column) by country-year
 
 # ── Step 5: Pull project data for B2B aggregates ──
 plan_ids = plans_df["plan_id"].unique()
@@ -212,12 +310,15 @@ for pid in plan_ids:
     resp = requests.get(f"{HPC_BASE}/project/plan/{pid}")
     if resp.ok:
         for p in resp.json().get("data", []):
-            if p.get("currentRequestedFunds", 0) > 0 and p.get("targetBeneficiaries", 0) > 0:
+            funds = p.get("currentRequestedFunds", 0) or 0
+            beneficiaries = p.get("targetBeneficiaries", 0) or 0
+            if funds > 0 and beneficiaries > 0:
                 all_projects.append({
                     "plan_id": pid,
-                    "iso3": p.get("locations", [{}])[0].get("iso3", ""),
-                    "requested_funds": p["currentRequestedFunds"],
-                    "target_beneficiaries": p["targetBeneficiaries"],
+                    "iso3": (p.get("locations") or [{}])[0].get("iso3", ""),
+                    "year": plans_df.loc[plans_df["plan_id"] == pid, "year"].iloc[0],
+                    "requested_funds": funds,
+                    "target_beneficiaries": beneficiaries,
                 })
 projects_df = pd.DataFrame(all_projects)
 projects_df["b2b_ratio"] = projects_df["target_beneficiaries"] / projects_df["requested_funds"]
@@ -229,19 +330,36 @@ b2b_agg = projects_df.groupby(["iso3", "year"]).agg(
     project_count=("b2b_ratio", "count"),
 ).reset_index()
 
+# Global 25th percentile B2B — used for INEFFICIENT classification
+global_b2b_p25 = projects_df["b2b_ratio"].quantile(0.25)
+
 # ── Step 6: Join everything ──
-# Start with acaps_df (spine)
-# Left join plans_df → has_hrp = True/False
-# Left join flows_df → funding_usd, requirements_usd, funding_gap_usd, funding_coverage_pct
-# Left join needs_agg → people_in_need
-# Left join b2b_agg → avg_b2b_ratio, median_b2b_ratio, project_count
-# Add lat/lng from static country centroid lookup
+# Start with acaps_df as the spine (one row per crisis per country-year)
+# Left join hrp_flags on iso3 + year → has_hrp, appeal_type, appeal_code,
+#   requirements_usd, funding_usd, funding_gap_usd, funding_coverage_pct
+# Left join needs_agg on iso3 + year → people_in_need
+# Left join b2b_agg on iso3 + year → avg_b2b_ratio, median_b2b_ratio, project_count
+# Fill has_hrp NaN → False, project_count NaN → 0
+
+# ── Step 7: Classify funding_state ──
+# For each row:
+#   if has_hrp is False (or NULL):
+#       funding_state = "NO_HRP"
+#   elif funding_coverage_pct < 0.50:
+#       funding_state = "UNDERFUNDED"
+#   elif median_b2b_ratio < global_b2b_p25:
+#       funding_state = "INEFFICIENT"
+#   else:
+#       funding_state = "ADEQUATE"
+
+# ── Step 8: Add lat/lng from static centroid lookup ──
 # Rank crises within each country by acaps_severity DESC
 # Filter to crisis_rank <= 8
 
-# ── Step 7: Write ──
+# ── Step 9: Write ──
 crisis_summary_sdf = spark.createDataFrame(final_df)
-crisis_summary_sdf.write.format("delta").mode("overwrite").saveAsTable("workspace.default.crisis_summary")
+crisis_summary_sdf.write.format("delta").mode("overwrite") \
+    .saveAsTable("workspace.default.crisis_summary")
 ```
 
 #### Country Centroid Lookup
@@ -440,6 +558,8 @@ Using the existing `workspace.default.*` catalog:
 
 The old tables (`plans`, `funding`, `humanitarian_needs`, `population`) remain untouched. They still power the legacy `/api/countries` endpoint and serve as cross-reference context for the ElevenLabs agent.
 
+> **Note:** The existing `workspace.default.funding` table already comes from the HDX HAPI funding endpoint — its columns (`location_code`, `appeal_code`, `appeal_name`, `funding_usd`, `requirements_usd`, `funding_pct`) match exactly. However, it was ingested without `appeal_type`, without the `has_hrp` distinction, and without the three-state classification. The new `crisis_summary` table replaces it for all globe-facing queries.
+
 ---
 
 ## 4. Backend Implementation
@@ -469,6 +589,8 @@ Response:
           "acaps_severity": 4.8,
           "severity_class": "Very High",
           "has_hrp": true,
+          "appeal_type": "HRP",
+          "funding_state": "UNDERFUNDED",
           "people_in_need": 24800000,
           "funding_gap_usd": 1960000000,
           "funding_coverage_pct": 0.30,
@@ -753,6 +875,13 @@ Each bar has a horizontal line showing the avg B2B ratio for that crisis relativ
 ```tsx
 import * as THREE from 'three';
 
+const FUNDING_STATE_COLORS = {
+  NO_HRP:       null,     // no line rendered
+  UNDERFUNDED:  0xff0000, // red
+  INEFFICIENT:  0xff8800, // orange
+  ADEQUATE:     0x00cc00, // green
+};
+
 <GlobeGL
   customLayerData={volcanoData}
   customThreeObject={(d) => {
@@ -760,26 +889,31 @@ import * as THREE from 'three';
     d.crises.forEach((crisis, i) => {
       const barHeight = crisis.acaps_severity * 0.1;
       const geometry = new THREE.BoxGeometry(0.3, barHeight, 0.3);
+
+      // NO_HRP crises get a wireframe bar to visually distinguish "invisible" crises
+      const isInvisible = crisis.funding_state === 'NO_HRP';
       const material = new THREE.MeshLambertMaterial({
         color: severityColor(crisis.acaps_severity),
         transparent: true,
-        opacity: 0.85,
+        opacity: isInvisible ? 0.3 : 0.85,
+        wireframe: isInvisible,
       });
       const bar = new THREE.Mesh(geometry, material);
       bar.position.x = i * 0.4 - (d.crises.length * 0.2);
       bar.position.y = barHeight / 2;
       group.add(bar);
 
-      // B2B ratio line within the bar
-      const b2bY = crisis.avg_b2b_ratio_percentile * barHeight;
-      const lineGeo = new THREE.BoxGeometry(0.35, 0.02, 0.35);
-      const lineMat = new THREE.MeshBasicMaterial({
-        color: crisis.avg_b2b_ratio_percentile > 0.5 ? 0x00ff00 : 0xff0000,
-      });
-      const line = new THREE.Mesh(lineGeo, lineMat);
-      line.position.x = bar.position.x;
-      line.position.y = b2bY;
-      group.add(line);
+      // B2B ratio line — only rendered if funding state is not NO_HRP
+      const lineColor = FUNDING_STATE_COLORS[crisis.funding_state];
+      if (lineColor !== null && crisis.avg_b2b_ratio != null) {
+        const b2bY = (crisis.avg_b2b_ratio_percentile ?? 0.5) * barHeight;
+        const lineGeo = new THREE.BoxGeometry(0.35, 0.02, 0.35);
+        const lineMat = new THREE.MeshBasicMaterial({ color: lineColor });
+        const line = new THREE.Mesh(lineGeo, lineMat);
+        line.position.x = bar.position.x;
+        line.position.y = b2bY;
+        group.add(line);
+      }
     });
     return group;
   }}
@@ -788,6 +922,15 @@ import * as THREE from 'three';
   }}
 />
 ```
+
+**Visual mapping summary:**
+
+| `funding_state` | Bar Style | B2B Line | Line Color |
+|---|---|---|---|
+| `NO_HRP` | Wireframe, 30% opacity | None | — |
+| `UNDERFUNDED` | Solid, 85% opacity | Shown | Red |
+| `INEFFICIENT` | Solid, 85% opacity | Shown | Orange |
+| `ADEQUATE` | Solid, 85% opacity | Shown | Green |
 
 ### 5.2 API Layer
 
@@ -886,17 +1029,21 @@ interface GlobeState {
 
 ```tsx
 // frontend/src/types/crisis.ts
+type FundingState = 'NO_HRP' | 'UNDERFUNDED' | 'INEFFICIENT' | 'ADEQUATE';
+
 interface CrisisSummary {
   crisis_id: string;
   crisis_name: string;
   acaps_severity: number;
   severity_class: string;
   has_hrp: boolean;
+  appeal_type: string | null;
+  funding_state: FundingState;
   people_in_need: number;
-  funding_gap_usd: number;
-  funding_coverage_pct: number;
-  avg_b2b_ratio: number;
-  median_b2b_ratio: number;
+  funding_gap_usd: number | null;
+  funding_coverage_pct: number | null;
+  avg_b2b_ratio: number | null;
+  median_b2b_ratio: number | null;
   project_count: number;
   crisis_rank: number;
 }
@@ -1114,11 +1261,13 @@ The frontend expects exactly this shape from `/api/globe/crises`:
           "acaps_severity": "number (0-5)",
           "severity_class": "string",
           "has_hrp": "boolean",
+          "appeal_type": "string | null ('HRP', 'Flash', 'Regional', 'Other')",
+          "funding_state": "string ('NO_HRP' | 'UNDERFUNDED' | 'INEFFICIENT' | 'ADEQUATE')",
           "people_in_need": "number",
-          "funding_gap_usd": "number",
-          "funding_coverage_pct": "number (0-1)",
-          "avg_b2b_ratio": "number",
-          "median_b2b_ratio": "number",
+          "funding_gap_usd": "number | null",
+          "funding_coverage_pct": "number (0-1) | null",
+          "avg_b2b_ratio": "number | null",
+          "median_b2b_ratio": "number | null",
           "project_count": "number",
           "crisis_rank": "number (1-8)"
         }
