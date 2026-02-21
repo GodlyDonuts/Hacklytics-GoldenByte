@@ -74,6 +74,10 @@ print(f"\nTotal projects collected: {len(all_projects)}")
 
 projects_pdf = pd.DataFrame(all_projects)
 
+# API sometimes returns strings -- coerce to numeric
+projects_pdf["budget"] = pd.to_numeric(projects_pdf["budget"], errors="coerce").fillna(0)
+projects_pdf["beneficiaries"] = pd.to_numeric(projects_pdf["beneficiaries"], errors="coerce").fillna(0)
+
 # Filter to projects with valid budget and beneficiary data
 valid = projects_pdf[
     (projects_pdf["budget"] > 0) & (projects_pdf["beneficiaries"] > 0)
