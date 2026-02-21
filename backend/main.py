@@ -8,13 +8,15 @@ from contextlib import asynccontextmanager
 # Load .env from backend/ when running from project root
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
-from .routers import countries, mismatch, compare, ask
+from .routers import ask, benchmark, countries, globe
 from .services.data_loader import load_all_data
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.data = await load_all_data()
     yield
+
 
 app = FastAPI(title="Crisis Topography API", lifespan=lifespan)
 
@@ -25,7 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(globe.router, prefix="/api/globe")
+app.include_router(benchmark.router, prefix="/api")
+app.include_router(ask.router, prefix="/api")
 app.include_router(countries.router, prefix="/api")
-app.include_router(mismatch.router, prefix="/api")
-#app.include_router(compare.router, prefix="/api")
-#app.include_router(ask.router, prefix="/api")
