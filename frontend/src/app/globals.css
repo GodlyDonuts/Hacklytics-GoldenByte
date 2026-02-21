@@ -84,3 +84,21 @@ body {
 .pulse-soft {
   animation: pulse-soft 4s infinite ease-in-out;
 }
+
+/* Screen-space label for globe point (2D overlay, not on globe surface) */
+.point-label {
+  padding: 6px 10px;
+  background: rgba(249, 115, 22, 0.95);
+  border: 1px solid #000;
+  border-radius: 4px;
+  color: #000;
+  font-size: 12px;
+  font-family: var(--font-mono), monospace;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(-50%, -100%);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+.point-label div {
+  line-height: 1.35;
+}
