@@ -3,3 +3,5 @@ uvicorn[standard]==0.30.0
 httpx==0.27.0
 pandas==2.2.0
 python-dotenv==1.0.1
+google-generativeai==0.8.0
+markdown-pdf==0.1.0
