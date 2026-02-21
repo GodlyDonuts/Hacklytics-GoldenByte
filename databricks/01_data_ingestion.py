@@ -67,8 +67,10 @@ print(f"Wrote {plans_sdf.count()} rows to workspace.default.plans")
 # MAGIC %md
 # MAGIC ## 2. Ingest Funding Flows by Country (2020-2026)
 # MAGIC
-# MAGIC The HPC FTS flow API returns funding data under `data.report1.fundingTotals.objects`
-# MAGIC when grouped by country. Each object has `name`, `id`, and `totalFunding`.
+# MAGIC The HPC FTS flow API returns per-country funding breakdowns under
+# MAGIC `data.report2.fundingTotals.objectsBreakdown`. Report2 = destination (recipient)
+# MAGIC countries. `objectsBreakdown` has 150+ entries per year vs `objects` which is
+# MAGIC just a single aggregate.
 
 # COMMAND ----------
 
@@ -80,22 +82,23 @@ for year in range(2020, 2027):
     )
     if resp.ok:
         data = resp.json().get("data", {})
-        # Funding data is in report1.fundingTotals.objects (not report3)
-        report = data.get("report1", {})
+        # report2 = destination/recipient countries
+        # objectsBreakdown has per-country rows (objects only has 1 aggregate)
+        report = data.get("report2", {})
         funding_totals = report.get("fundingTotals", {})
-        objects = funding_totals.get("objects", [])
-        for obj in objects:
+        breakdown = funding_totals.get("objectsBreakdown", [])
+        for obj in breakdown:
             all_flows.append(
                 {
                     "year": year,
                     "country_name": obj.get("name", ""),
                     "country_id": str(obj.get("id", "")),
                     "totalFunding": obj.get("totalFunding", 0),
+                    "singleFunding": obj.get("singleFunding", 0),
                     "type": obj.get("type", ""),
-                    "direction": obj.get("direction", ""),
                 }
             )
-        print(f"  -> {len(objects)} country-flow rows")
+        print(f"  -> {len(breakdown)} country-flow rows")
     else:
         print(f"  -> Failed: {resp.status_code}")
     time.sleep(0.5)
