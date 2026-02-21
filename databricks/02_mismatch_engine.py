@@ -77,11 +77,16 @@ severity.orderBy(F.desc("people_in_need")).show(10, truncate=False)
 
 funding = spark.table("workspace.default.funding")
 
-# Use only the latest reference period year to match the severity data window.
+# Use only the latest plausible reference period year to match the severity data window.
 # Without this filter, funding sums span 2020-2026 producing cumulative multi-year totals.
+# Cap at current year to ignore malformed future-dated records from the API.
+import datetime
+current_year = datetime.date.today().year
+
 funding_latest = funding.withColumn(
     "ref_year", F.year("reference_period_start")
-)
+).filter(F.col("ref_year") <= current_year)
+
 max_year = funding_latest.agg(F.max("ref_year")).collect()[0][0]
 funding_latest = funding_latest.filter(F.col("ref_year") == max_year).drop("ref_year")
 print(f"Using funding data for year: {max_year}")
