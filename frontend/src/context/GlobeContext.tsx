@@ -36,7 +36,7 @@ type GlobeContextValue = GlobeState & {
 const defaultState: GlobeState = {
   selectedCountry: null,
   filters: {
-    year: new Date().getFullYear(),
+    year: Math.min(2026, Math.max(2022, new Date().getFullYear())),
     month: new Date().getMonth() + 1,
     country: null,
     crisis: null,

@@ -1,200 +1,26 @@
 "use client";
 
-import { useConversation } from "@elevenlabs/react";
-import { useCallback, useState, useEffect, useRef } from "react";
-import { useGlobeContext } from "@/context/GlobeContext";
+import { useVoiceChat } from "@/context/VoiceChatContext";
 
-const AGENT_ID = process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID || "agent_1201khzd23t9fsaramppkhnftan0";
-
-/** For testing: send text to the agent from the console, e.g. sendAgentText("Show me Afghanistan") */
-declare global {
-    interface Window {
-        sendAgentText?: (text: string) => void;
-    }
-}
-
+/** Visual overlay only: aurora, Hold Space hint, agent speaking indicator. Voice logic lives in VoiceAgentProvider. */
 export function VoiceAgent() {
-    const [isSpacePressed, setIsSpacePressed] = useState(false);
-    const [hasStarted, setHasStarted] = useState(false);
-    const [textPanelOpen, setTextPanelOpen] = useState(false);
-    const [textInput, setTextInput] = useState("");
-    const [textError, setTextError] = useState<string | null>(null);
-    const { setFlyToCoordinates, setComparisonData, setViewMode } = useGlobeContext();
-    const conversationRef = useRef<ReturnType<typeof useConversation> | null>(null);
-
-    // We pass micMuted dynamic state directly to the hook
-    const conversation = useConversation({
-        onConnect: () => {
-            console.log("VoiceAgent connected");
-        },
-        onDisconnect: () => {
-            console.log("VoiceAgent disconnected");
-            setHasStarted(false);
-        },
-        onError: (error) => console.error("VoiceAgent error:", error),
-        micMuted: !isSpacePressed,
-        clientTools: {
-            show_location_on_globe: (parameters: { lat: number; lng: number }) => {
-                console.log("AI called show_location_on_globe:", parameters);
-                setFlyToCoordinates({
-                    lat: parameters.lat,
-                    lng: parameters.lng,
-                    altitude: 1.5
-                });
-                return "Successfully moved the globe.";
-            },
-            change_view_mode: (parameters: { mode: 'severity' | 'funding-gap' | 'anomalies' }) => {
-                console.log("AI called change_view_mode:", parameters);
-                setViewMode(parameters.mode);
-                return `Successfully changed the view mode to ${parameters.mode}.`;
-            },
-            compare_countries: (parameters: {
-                sourceIso: string; targetIso: string;
-                sourceLat: number; sourceLng: number;
-                targetLat: number; targetLng: number;
-                sourceStats: { mismatch: number; peopleInNeed: number; risk: number; severity: number; gap: number; };
-                targetStats: { mismatch: number; peopleInNeed: number; risk: number; severity: number; gap: number; };
-            }) => {
-                console.log("AI called compare_countries:", parameters);
-                setFlyToCoordinates({
-                    lat: parameters.sourceLat,
-                    lng: parameters.sourceLng,
-                    altitude: 2.0
-                });
-                setComparisonData({
-                    sourceIso: parameters.sourceIso,
-                    targetIso: parameters.targetIso,
-                    sourceLat: parameters.sourceLat,
-                    sourceLng: parameters.sourceLng,
-                    targetLat: parameters.targetLat,
-                    targetLng: parameters.targetLng,
-                    sourceStats: parameters.sourceStats,
-                    targetStats: parameters.targetStats
-                });
-                return "Successfully compared the countries. The user can now see the visualization.";
-            },
-            end_conversation: (parameters: {}) => {
-                console.log("AI called end_conversation:", parameters);
-                // We'll set hasStarted to false to reset UI, and rely on the useEffect below to actually end the session
-                setHasStarted(false);
-                return "Conversation ended.";
-            }
-        }
-    });
-
-    conversationRef.current = conversation;
-
-    useEffect(() => {
-        if (!hasStarted && conversation.status === "connected") {
-            conversation.endSession();
-        }
-    }, [hasStarted, conversation]);
-
-    const startVoiceSession = useCallback(async () => {
-        try {
-            if (conversation.status === "connected" || conversation.status === "connecting") return;
-            await navigator.mediaDevices.getUserMedia({ audio: true });
-            await conversation.startSession({ agentId: AGENT_ID, connectionType: "websocket" });
-            setHasStarted(true);
-        } catch (err) {
-            console.error("Failed to start ElevenLabs session", err);
-        }
-    }, [conversation]);
-
-    /** Start session without requesting mic — for text-only testing. May still require mic on some agents. */
-    const startSessionForText = useCallback(async () => {
-        try {
-            if (conversation.status === "connected" || conversation.status === "connecting") return true;
-            await conversation.startSession({ agentId: AGENT_ID, connectionType: "websocket" });
-            setHasStarted(true);
-            return true;
-        } catch (err) {
-            console.error("Failed to start session for text", err);
-            return false;
-        }
-    }, [conversation]);
-
-    const sendTextToAgent = useCallback(async (text: string) => {
-        setTextError(null);
-        const t = text.trim();
-        if (!t) return;
-        try {
-            if (conversation.status !== "connected") {
-                const started = await startSessionForText();
-                if (!started) {
-                    setTextError("Could not connect. Try holding Space and allowing the microphone once, then use this again.");
-                    return;
-                }
-            }
-            conversation.sendUserMessage(t);
-            setTextInput("");
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            setTextError(msg);
-            console.error("sendUserMessage failed", err);
-        }
-    }, [conversation, startSessionForText]);
-
-    // Expose text send for console testing: sendAgentText("Show me Afghanistan")
-    useEffect(() => {
-        window.sendAgentText = (text: string) => {
-            if (conversationRef.current) sendTextToAgent(text);
-            else console.warn("VoiceAgent not ready yet.");
-        };
-        return () => {
-            delete window.sendAgentText;
-        };
-    }, [sendTextToAgent]);
-
-    // Handle Spacebar interactions globally
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            const activeTag = document.activeElement?.tagName.toLowerCase();
-            const isInput = activeTag === "input" || activeTag === "textarea" || activeTag === "select";
-
-            if (e.code === "Space" && !e.repeat && !isInput) {
-                e.preventDefault(); // Prevent page scrolling
-                setIsSpacePressed(true);
-
-                // Auto-connect on the first time they ever press space
-                if (!hasStarted && conversation.status !== "connected" && conversation.status !== "connecting") {
-                    startVoiceSession();
-                }
-            }
-        };
-
-        const handleKeyUp = (e: KeyboardEvent) => {
-            if (e.code === "Space") {
-                setIsSpacePressed(false);
-            }
-        };
-
-        window.addEventListener("keydown", handleKeyDown);
-        window.addEventListener("keyup", handleKeyUp);
-
-        return () => {
-            window.removeEventListener("keydown", handleKeyDown);
-            window.removeEventListener("keyup", handleKeyUp);
-        };
-    }, [hasStarted, conversation.status, startVoiceSession]);
+    const { isSpacePressed, hasStarted, isSpeaking } = useVoiceChat();
 
     return (
         <>
-            {/* Premium Aurora Effect showing when space is pressed */}
+            {/* Premium Aurora Effect when space is pressed */}
             <div
                 className={`fixed bottom-0 left-0 w-full h-[25vh] pointer-events-none z-40 transition-all duration-1000 ease-in-out ${isSpacePressed ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'
                     }`}
             >
                 <div className="absolute bottom-0 left-0 w-full h-full bg-gradient-to-t from-emerald-500/10 via-cyan-500/5 to-transparent mix-blend-screen" />
-
-                {/* Organic Animated Blobs */}
                 <div className="aurora-1 absolute -bottom-[15vh] left-[0%] w-[40vw] h-[30vh] bg-emerald-400 rounded-full mix-blend-screen blur-[120px] opacity-60" />
                 <div className="aurora-2 absolute -bottom-[20vh] left-[30%] w-[50vw] h-[30vh] bg-cyan-400 rounded-full mix-blend-screen blur-[140px] opacity-50" />
                 <div className="aurora-3 absolute -bottom-[15vh] left-[60%] w-[40vw] h-[30vh] bg-blue-500 rounded-full mix-blend-screen blur-[120px] opacity-60" />
                 <div className="pulse-soft absolute -bottom-[10vh] left-[45%] w-[10vw] h-[15vh] bg-white rounded-full mix-blend-screen blur-[100px] opacity-40" />
             </div>
 
-            {/* Subtle Hint Text */}
+            {/* Hold Space hint */}
             <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none transition-all duration-700 font-sans tracking-[0.2em] text-xs uppercase ${isSpacePressed
                 ? 'opacity-0 translate-y-4'
                 : 'opacity-50 text-white translate-y-0'
@@ -206,66 +32,12 @@ export function VoiceAgent() {
                 </div>
             </div>
 
-            {/* Very faint agent speaking indicator */}
-            {hasStarted && conversation.isSpeaking && !isSpacePressed && (
+            {/* Agent speaking indicator */}
+            {hasStarted && isSpeaking && !isSpacePressed && (
                 <div className="fixed bottom-0 left-0 w-full h-[20vh] pointer-events-none z-30 transition-all duration-1000 ease-in-out opacity-80">
                     <div className="pulse-soft absolute -bottom-[10vh] left-[40%] w-[20vw] h-[15vh] bg-blue-400 rounded-full mix-blend-screen blur-[120px]" />
                 </div>
             )}
-
-            {/* Text test panel — same as voice but type instead of talk */}
-            <div className="fixed top-4 right-4 z-50 flex flex-col items-end gap-1">
-                {!textPanelOpen ? (
-                    <button
-                        type="button"
-                        onClick={() => setTextPanelOpen(true)}
-                        className="rounded-lg bg-black/60 px-3 py-2 text-xs font-medium text-white ring-1 ring-white/20 hover:bg-black/80"
-                        title="Send text to agent (testing)"
-                    >
-                        Text test
-                    </button>
-                ) : (
-                    <div className="w-72 rounded-lg bg-black/80 p-3 ring-1 ring-white/20 shadow-xl">
-                        <div className="mb-2 flex items-center justify-between">
-                            <span className="text-xs font-medium text-white/90">Send text to agent</span>
-                            <button
-                                type="button"
-                                onClick={() => setTextPanelOpen(false)}
-                                className="text-white/60 hover:text-white"
-                                aria-label="Close"
-                            >
-                                ×
-                            </button>
-                        </div>
-                        <textarea
-                            value={textInput}
-                            onChange={(e) => setTextInput(e.target.value)}
-                            onKeyDown={(e) => {
-                                if (e.key === "Enter" && !e.shiftKey) {
-                                    e.preventDefault();
-                                    sendTextToAgent(textInput);
-                                }
-                            }}
-                            placeholder="e.g. Show me Afghanistan"
-                            rows={2}
-                            className="mb-2 w-full resize-none rounded border border-white/20 bg-white/5 px-2 py-1.5 text-sm text-white placeholder:text-white/40 focus:border-cyan-400 focus:outline-none"
-                        />
-                        {textError && (
-                            <p className="mb-2 text-xs text-amber-400">{textError}</p>
-                        )}
-                        <button
-                            type="button"
-                            onClick={() => sendTextToAgent(textInput)}
-                            className="w-full rounded bg-cyan-600 py-1.5 text-sm font-medium text-white hover:bg-cyan-500"
-                        >
-                            Send
-                        </button>
-                        <p className="mt-2 text-[10px] text-white/50">
-                            Console: sendAgentText(&quot;your message&quot;)
-                        </p>
-                    </div>
-                )}
-            </div>
         </>
     );
 }

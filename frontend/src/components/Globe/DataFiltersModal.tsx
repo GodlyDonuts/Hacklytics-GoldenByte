@@ -8,7 +8,7 @@ const MONTHS = [
   "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
 ];
 
-const YEARS = [2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025];
+const YEARS = [2022, 2023, 2024, 2025, 2026];
 
 const COUNTRIES = [
   { value: null, label: "All countries" },
