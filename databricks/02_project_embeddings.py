@@ -32,11 +32,14 @@ import numpy as np
 import re
 import time
 import os
+import base64
 
 # Suppress VectorSearchClient notices
 os.environ["DATABRICKS_VECTOR_SEARCH_DISABLE_NOTICE"] = "true"
 
 HPC_BASE = "https://api.hpc.tools/v1/public"
+HDX_BASE = "https://hapi.humdata.org/api/v2"
+APP_ID = base64.b64encode(b"CrisisTopography:pa636132@ucf.edu").decode()
 YEARS = range(2022, 2027)
 
 # Vector search resource names
@@ -127,7 +130,6 @@ for i, plan in enumerate(plan_rows):
                     "cluster": clusters[0].get("name", "Unknown") if clusters else "Unknown",
                     "sector": sectors[0].get("name", "") if sectors else "",
                     "requested_funds": float(p.get("currentRequestedFunds", 0) or 0),
-                    "target_beneficiaries": float(p.get("targetBeneficiaries", 0) or 0),
                     "description": (p.get("description", "") or "")[:500],
                     "objectives": (p.get("objectives", "") or "")[:500],
                 })
@@ -140,25 +142,113 @@ print(f"Total projects collected: {len(all_projects)}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 3: Filter to Valid Projects (budget > 0 AND beneficiaries > 0)
+# MAGIC ## Step 3: Pull Targeted Beneficiaries from HDX HAPI
+# MAGIC The HPC project API does not expose per-project beneficiary counts.
+# MAGIC Pull country-level targeted beneficiaries (TGT) and allocate to each project
+# MAGIC proportionally based on its share of the country-year budget.
+
+# COMMAND ----------
+
+all_tgt = []
+offset = 0
+PAGE = 10000
+
+while True:
+    print(f"Fetching targeted beneficiaries (offset={offset})...")
+    try:
+        resp = requests.get(
+            f"{HDX_BASE}/affected-people/humanitarian-needs",
+            params={
+                "app_identifier": APP_ID,
+                "limit": PAGE,
+                "offset": offset,
+                "reference_period_start_min": "2022-01-01",
+                "population_status": "TGT",
+                "admin_level": 0,
+            },
+            timeout=60,
+        )
+        if not resp.ok:
+            print(f"  -> HTTP {resp.status_code}")
+            break
+        data = resp.json().get("data", [])
+        if not data:
+            print("  -> Done.")
+            break
+        all_tgt.extend(data)
+        print(f"  -> {len(data)} records (total: {len(all_tgt)})")
+        offset += PAGE
+    except Exception as e:
+        print(f"  -> Error: {e}")
+        break
+    time.sleep(0.3)
+
+tgt_raw = pd.DataFrame(all_tgt) if all_tgt else pd.DataFrame()
+print(f"\nTotal TGT records: {len(tgt_raw)}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Aggregate TGT to country-year and allocate to projects
 
 # COMMAND ----------
 
 projects_df = pd.DataFrame(all_projects)
-
-# Coerce to numeric
 projects_df["requested_funds"] = pd.to_numeric(projects_df["requested_funds"], errors="coerce").fillna(0)
-projects_df["target_beneficiaries"] = pd.to_numeric(projects_df["target_beneficiaries"], errors="coerce").fillna(0)
 
-# Filter to projects with both budget and beneficiaries
-valid = projects_df[
-    (projects_df["requested_funds"] > 0) &
-    (projects_df["target_beneficiaries"] > 0)
-].copy()
+# Filter to projects with budget
+projects_df = projects_df[projects_df["requested_funds"] > 0].copy()
+print(f"Projects with budget > 0: {len(projects_df)}")
 
-print(f"Valid projects (funds > 0 AND beneficiaries > 0): {len(valid)} / {len(projects_df)}")
-print(f"Projects with budget but no beneficiaries: "
-      f"{len(projects_df[(projects_df['requested_funds'] > 0) & (projects_df['target_beneficiaries'] == 0)])}")
+# Aggregate targeted beneficiaries per country-year
+if len(tgt_raw) > 0:
+    tgt_raw["reference_period_start"] = pd.to_datetime(
+        tgt_raw["reference_period_start"], errors="coerce"
+    )
+    tgt_raw["year"] = tgt_raw["reference_period_start"].dt.year.astype("Int64")
+    tgt_raw["population"] = pd.to_numeric(tgt_raw["population"], errors="coerce")
+    tgt_raw = tgt_raw[tgt_raw["year"].between(2022, 2026)].copy()
+
+    # Use Intersectoral rows for de-duplicated totals
+    if "sector_name" in tgt_raw.columns:
+        inter = tgt_raw[
+            tgt_raw["sector_name"].str.contains("Intersector", case=False, na=False)
+        ]
+        if len(inter) > 0:
+            tgt_raw = inter
+
+    tgt_agg = (
+        tgt_raw.groupby(["location_code", "year"])
+        .agg(country_tgt=("population", "sum"))
+        .reset_index()
+    )
+    tgt_agg = tgt_agg.rename(columns={"location_code": "iso3"})
+    tgt_agg["iso3"] = tgt_agg["iso3"].str.strip().str.upper()
+    print(f"TGT aggregated: {len(tgt_agg)} country-year rows")
+else:
+    tgt_agg = pd.DataFrame(columns=["iso3", "year", "country_tgt"])
+    print("No TGT data available")
+
+# Compute each project's share of its country-year total budget
+country_yr_budget = (
+    projects_df.groupby(["iso3", "year"])["requested_funds"]
+    .sum()
+    .reset_index()
+    .rename(columns={"requested_funds": "country_year_budget"})
+)
+
+projects_df = projects_df.merge(country_yr_budget, on=["iso3", "year"], how="left")
+projects_df["budget_share"] = projects_df["requested_funds"] / projects_df["country_year_budget"]
+
+# Join country-level TGT and allocate proportionally
+projects_df = projects_df.merge(tgt_agg, on=["iso3", "year"], how="left")
+projects_df["target_beneficiaries"] = (
+    projects_df["country_tgt"].fillna(0) * projects_df["budget_share"]
+).round(0)
+
+# Keep projects that received beneficiary allocation
+valid = projects_df[projects_df["target_beneficiaries"] > 0].copy()
+print(f"Projects with allocated beneficiaries: {len(valid)} / {len(projects_df)}")
 
 # COMMAND ----------
 
