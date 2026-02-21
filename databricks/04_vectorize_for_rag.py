@@ -20,8 +20,11 @@ dbutils.library.restartPython()
 
 # COMMAND ----------
 
+import os
 import time
 import pandas as pd
+
+os.environ["DATABRICKS_VECTOR_SEARCH_DISABLE_NOTICE"] = "true"
 from databricks.vector_search.client import VectorSearchClient
 
 ENDPOINT_NAME = "crisis-rag-endpoint"
