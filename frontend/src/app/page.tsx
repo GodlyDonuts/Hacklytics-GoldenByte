@@ -17,6 +17,7 @@
 
 import React, { useMemo } from 'react';
 import dynamic from 'next/dynamic';
+import { VoiceAgent } from '@/components/VoiceAgent';
 
 const Globe = dynamic(() => import('react-globe.gl'), { ssr: false });
 
@@ -30,7 +31,8 @@ export default function GlobeScene() {
   })), []);
 
   return (
-    <div className="globe-container">
+    <div className="globe-container relative min-h-screen w-full overflow-hidden bg-black">
+      <VoiceAgent />
       <Globe
         globeImageUrl="//unpkg.com/three-globe/example/img/earth-night.jpg"
         backgroundImageUrl="//unpkg.com/three-globe/example/img/night-sky.png"
