@@ -65,9 +65,7 @@ async def get_globe_crises(
             "people_in_need": _int(r.get("people_in_need")),
             "funding_gap_usd": _float(r.get("funding_gap_usd")),
             "funding_coverage_pct": _float(r.get("funding_coverage_pct")),
-            "avg_b2b_ratio": _float(r.get("avg_b2b_ratio")),
-            "median_b2b_ratio": _float(r.get("median_b2b_ratio")),
-            "project_count": _int(r.get("project_count")),
+            "b2b_ratio": _float(r.get("avg_b2b_ratio")),
             "crisis_rank": _int(r.get("crisis_rank")),
         }
         by_country[iso3].append(crisis)
@@ -122,9 +120,20 @@ async def get_globe_b2b(
             "cluster_median_b2b": _float(r.get("cluster_median_b2b")),
         })
 
+    # Weighted B2B: sum(beneficiaries) / sum(funding) -- weights by project size
+    total_beneficiaries = sum(
+        p["target_beneficiaries"] for p in projects
+        if p["target_beneficiaries"] is not None and p["requested_funds"] is not None
+        and p["requested_funds"] > 0
+    )
+    total_funding = sum(
+        p["requested_funds"] for p in projects
+        if p["target_beneficiaries"] is not None and p["requested_funds"] is not None
+        and p["requested_funds"] > 0
+    )
     b2b_ratios = [p["b2b_ratio"] for p in projects if p["b2b_ratio"] is not None]
     summary = {
-        "avg_b2b": sum(b2b_ratios) / len(b2b_ratios) if b2b_ratios else None,
+        "weighted_b2b": total_beneficiaries / total_funding if total_funding > 0 else None,
         "median_b2b": _median(b2b_ratios) if b2b_ratios else None,
         "total_projects": len(projects),
         "outlier_count": sum(1 for p in projects if p.get("is_outlier")),

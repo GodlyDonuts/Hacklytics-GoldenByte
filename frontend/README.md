@@ -45,7 +45,8 @@ src/
 ├── components/
 │   ├── VoiceAgent.tsx      # ElevenLabs voice agent (spacebar push-to-talk)
 │   ├── Globe/
-│   │   └── GlobeView.tsx   # react-globe.gl wrapper (currently unused)
+│   │   ├── GlobeView.tsx   # Core 3D visualization and layers
+│   │   └── layers/         # Abstracted components for Heatmap, Points, etc.
 │   └── landing/            # Landing page components ↓
 │       ├── ThemeProvider.tsx
 │       ├── LandingContent.tsx
@@ -173,16 +174,37 @@ Light → Footer (matches the "tabs" light phase)
 
 ## Globe Page (`/globe`)
 
-- Uses `react-globe.gl` via `next/dynamic` (SSR disabled — WebGL)
-- Renders 20 random arcs on the globe
-- Includes `<VoiceAgent />` overlay
+The 3D Globe visualization and conversational AI agent represent the core interactive experience of the platform. It enables users to explore complex humanitarian datasets using natural language.
 
-### `VoiceAgent.tsx`
-- Integrates ElevenLabs conversational AI via `@elevenlabs/react`
-- **Push-to-talk**: Hold spacebar to unmute mic, release to mute
-- First spacebar press auto-connects the WebSocket session
-- Aurora effect: emerald/cyan/blue gradient glow at bottom of screen while space is held
-- Agent speaking indicator: faint blue pulse when AI is talking
+### 1. Global State Management (`GlobeContext.tsx`)
+The application uses React Context to centrally manage data required by the globe and voice agent:
+- **`selectedCountry`**: Tracks the currently highlighted ISO3 country code.
+- **`filters`**: Global criteria (e.g., active `year`), driving backend data queries.
+- **`viewMode`**: Determines which data metric drives the visual heatmaps (`severity`, `funding-gap`, `anomalies`).
+- **`flyToCoordinates`**: A geographical coordinate (lat, lng, altitude) that seamlessly commands the globe to animate a pan/zoom sequence when set.
+- **`comparisonData`**: Stores complex statistical data when comparing two distinct countries, driving the animated Arcs Layer.
+
+### 2. The 3D Geospatial Engine (`GlobeView.tsx`)
+The globe relies on `globe.gl` (Three.js abstraction) layered with distinct graphical components:
+
+*   **Polygons Layer**: The foundation. It reads a GeoJSON file to render the actual country shapes. Styled to be nearly transparent with sharp white borders, it adds wireframe definition to the underlying dark earth texture.
+*   **Heatmap Layer**: The primary visualization medium. It aggregates country crises based on the active `viewMode`:
+    1.  **Severity**: Aggregates Total People in Need (capped at 30M for max intensity).
+    2.  **Funding Gap**: Aggregates the Total Funding Gap in USD (capped at $1B).
+    3.  **Anomalies**: Averages the ML-driven B2B ratio score (capped at 100%).
+    This data computes a `weight` (0 to 1) for each geographical cluster, determining its visual color intensity and height on the globe's surface.
+*   **HTML Elements Layer**: Renders an interactive, DOM-based overlay. Clicking on a country's cluster surfaces a quick-view label detailing the country name, the number of localized crises, and summarized populations in need.
+*   **Arcs Layer**: An animated data layer connecting source and target coordinates. Typically triggered by the Voice Agent during country comparisons, it renders an animated, dashed glowing arc to visualize relationships.
+
+### 3. Conversational AI Integration (`VoiceAgent.tsx`)
+The platform features an intelligent, orchestrating voice-first interface powered by an ElevenLabs agent, connected via WebSockets.
+
+*   **Push-to-Talk Interface**: The microphone seamlessly activates by pressing and holding the `Spacebar` globally. An immersive "Aurora" UI element consisting of animated, colored gradients dynamically illuminates the bottom of the screen to signal that the AI is listening. A secondary faint blue pulse indicates when the agent is speaking.
+*   **Real-time UI Manipulation (`clientTools`)**: The AI acts as an active orchestrator. Through ElevenLabs' client tools hook (`useConversation`), the AI is explicitly empowered to trigger frontend functions in real-time based on natural language logic:
+    *   `show_location_on_globe`: The AI parses a geographic request (e.g., "Show me Sudan"), determines the coordinates, and instructs the UI to smoothly pan/zoom the globe camera.
+    *   `change_view_mode`: The AI maps requests (e.g., "Show me the worst scenarios") and alters the entire Heatmap Layer metric (`severity` ↔ `funding-gap` ↔ `anomalies`).
+    *   `compare_countries`: The AI aggregates data between two nations and passes the coordinates to the frontend to draw the glowing Comparison Arc layer while adjusting the viewport to perfectly frame both countries.
+    *   `end_conversation`: Handles the breakdown of the websocket streaming connection.
 
 ---
 

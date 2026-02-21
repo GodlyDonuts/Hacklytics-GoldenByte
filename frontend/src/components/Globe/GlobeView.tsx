@@ -151,7 +151,7 @@ export default function GlobeView() {
         totalSeverity += crisis.acaps_severity || 0;
         totalFundingGap += crisis.funding_gap_usd || 0;
         totalPeopleInNeed += crisis.people_in_need || 0;
-        sumB2B += crisis.avg_b2b_ratio || 0;
+        sumB2B += crisis.b2b_ratio || 0;
         count += 1;
       });
 

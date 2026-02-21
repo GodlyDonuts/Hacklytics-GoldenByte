@@ -7,6 +7,8 @@ import { VoiceChatModal } from '@/components/VoiceChatModal';
 import { GlobeProvider } from '@/context/GlobeContext';
 import { VoiceAgentProvider } from '@/context/VoiceChatContext';
 import { ComparisonPanel } from '@/components/Globe/ComparisonPanel';
+import { GenieChartPanel } from '@/components/Globe/GenieChartPanel';
+import { CountryDetailOverlay } from '@/components/Sidebar/CountryDetailOverlay';
 
 const GlobeView = dynamic(() => import('@/components/Globe/GlobeView'), { ssr: false });
 
@@ -22,6 +24,7 @@ export default function GlobeScene() {
                     <VoiceChatModal open={chatOpen} onToggle={() => setChatOpen((o) => !o)} />
                 </div>
                 <VoiceAgent />
+                <GenieChartPanel />
                 <ComparisonPanel />
             </VoiceAgentProvider>
         </GlobeProvider>

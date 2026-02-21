@@ -1,6 +1,14 @@
 'use client';
 
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, ReactNode } from 'react';
+
+export interface GenieChartData {
+  question: string;
+  columns: { name: string; type: string }[];
+  rows: (string | number | null)[][];
+  description: string | null;
+  sql: string | null;
+}
 
 export interface GlobeState {
   selectedCountry: string | null;
@@ -22,6 +30,7 @@ export interface GlobeState {
     sourceStats: { mismatch: number; peopleInNeed: number; risk: number; severity: number; gap: number; };
     targetStats: { mismatch: number; peopleInNeed: number; risk: number; severity: number; gap: number; };
   } | null;
+  genieChartData: GenieChartData | null;
 }
 
 type GlobeContextValue = GlobeState & {
@@ -31,6 +40,7 @@ type GlobeContextValue = GlobeState & {
   setLayersVisible: React.Dispatch<React.SetStateAction<GlobeState['layersVisible']>>;
   setFlyToCoordinates: React.Dispatch<React.SetStateAction<GlobeState['flyToCoordinates']>>;
   setComparisonData: React.Dispatch<React.SetStateAction<GlobeState['comparisonData']>>;
+  setGenieChartData: React.Dispatch<React.SetStateAction<GlobeState['genieChartData']>>;
 };
 
 const defaultState: GlobeState = {
@@ -47,6 +57,7 @@ const defaultState: GlobeState = {
   layersVisible: { choropleth: true, heatmap: true, points: true },
   flyToCoordinates: null,
   comparisonData: null,
+  genieChartData: null,
 };
 
 const GlobeContext = createContext<GlobeContextValue | null>(null);
@@ -58,6 +69,7 @@ export function GlobeProvider({ children }: { children: ReactNode }) {
   const [layersVisible, setLayersVisible] = useState<GlobeState['layersVisible']>(defaultState.layersVisible);
   const [flyToCoordinates, setFlyToCoordinates] = useState<GlobeState['flyToCoordinates']>(defaultState.flyToCoordinates);
   const [comparisonData, setComparisonData] = useState<GlobeState['comparisonData']>(defaultState.comparisonData);
+  const [genieChartData, setGenieChartData] = useState<GlobeState['genieChartData']>(defaultState.genieChartData);
 
   const value: GlobeContextValue = {
     selectedCountry,
@@ -66,12 +78,14 @@ export function GlobeProvider({ children }: { children: ReactNode }) {
     layersVisible,
     flyToCoordinates,
     comparisonData,
+    genieChartData,
     setSelectedCountry,
     setFilters,
     setViewMode,
     setLayersVisible,
     setFlyToCoordinates,
     setComparisonData,
+    setGenieChartData,
   };
 
   return <GlobeContext.Provider value={value}>{children}</GlobeContext.Provider>;
