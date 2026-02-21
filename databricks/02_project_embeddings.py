@@ -18,7 +18,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install databricks-vectorsearch
+# MAGIC %pip install databricks-vectorsearch scikit-learn
 
 # COMMAND ----------
 
@@ -121,6 +121,9 @@ for i, plan in enumerate(plan_rows):
                 clusters = p.get("globalClusters", [])
                 sectors = p.get("sectors", [])
 
+                cur_funds = float(p.get("currentRequestedFunds", 0) or 0)
+                orig_funds = float(p.get("origRequestedFunds", 0) or 0)
+
                 all_projects.append({
                     "project_code": code,
                     "project_name": (p.get("name", "") or "")[:300],
@@ -130,7 +133,8 @@ for i, plan in enumerate(plan_rows):
                     "year": plan["year"],
                     "cluster": clusters[0].get("name", "Unknown") if clusters else "Unknown",
                     "sector": sectors[0].get("name", "") if sectors else "",
-                    "requested_funds": float(p.get("currentRequestedFunds", 0) or 0),
+                    "requested_funds": cur_funds,
+                    "orig_requested_funds": orig_funds,
                     "description": (p.get("description", "") or "")[:500],
                     "objectives": (p.get("objectives", "") or "")[:500],
                 })
@@ -205,7 +209,32 @@ print(f"Projects with budget > 0: {len(projects_df)}")
 print(f"Project ISO3 samples: {sorted(projects_df['iso3'].unique())[:20]}")
 print(f"Project year dtype: {projects_df['year'].dtype}")
 
-# Aggregate targeted beneficiaries per country-year
+# --- Sector-level TGT allocation ---
+# Map HDX HAPI sector names to HPC global cluster names so we can join
+# sector-level beneficiary data to projects by their humanitarian cluster.
+SECTOR_TO_CLUSTER = {
+    "Health": "Health",
+    "Food Security": "Food Security",
+    "Food Security & Livelihoods": "Food Security",
+    "Water Sanitation Hygiene": "Water Sanitation Hygiene",
+    "Water, Sanitation and Hygiene": "Water Sanitation Hygiene",
+    "WASH": "Water Sanitation Hygiene",
+    "Protection": "Protection",
+    "Shelter/NFI": "Emergency Shelter and NFI",
+    "Shelter and Non-Food Items": "Emergency Shelter and NFI",
+    "Emergency Shelter and NFI": "Emergency Shelter and NFI",
+    "Nutrition": "Nutrition",
+    "Education": "Education",
+    "Camp Coordination / Management": "Camp Coordination and Camp Management",
+    "Camp Coordination and Camp Management": "Camp Coordination and Camp Management",
+    "Early Recovery": "Early Recovery",
+    "Logistics": "Logistics",
+    "Emergency Telecommunications": "Emergency Telecommunications",
+    "Multi-Sector": "Multi-Sector",
+    "Coordination": "Coordination and Common Services",
+    "Coordination and Common Services": "Coordination and Common Services",
+}
+
 if len(tgt_raw) > 0:
     tgt_raw["reference_period_start"] = pd.to_datetime(
         tgt_raw["reference_period_start"], errors="coerce"
@@ -214,58 +243,97 @@ if len(tgt_raw) > 0:
     tgt_raw["population"] = pd.to_numeric(tgt_raw["population"], errors="coerce")
     tgt_raw = tgt_raw[tgt_raw["year"].between(2022, 2026)].copy()
 
-    # Use Intersectoral rows for de-duplicated totals
-    if "sector_name" in tgt_raw.columns:
-        inter = tgt_raw[
-            tgt_raw["sector_name"].str.contains("Intersector", case=False, na=False)
-        ]
-        if len(inter) > 0:
-            tgt_raw = inter
+    # Split into sector-level rows and Intersectoral (country-level fallback)
+    has_sector = "sector_name" in tgt_raw.columns
+    if has_sector:
+        inter_mask = tgt_raw["sector_name"].str.contains("Intersector", case=False, na=False)
+        sector_tgt = tgt_raw[~inter_mask].copy()
+        inter_tgt = tgt_raw[inter_mask].copy()
+    else:
+        sector_tgt = pd.DataFrame()
+        inter_tgt = tgt_raw.copy()
 
-    tgt_agg = (
-        tgt_raw.groupby(["location_code", "year"])
-        .agg(country_tgt=("population", "sum"))
-        .reset_index()
-    )
-    tgt_agg = tgt_agg.rename(columns={"location_code": "iso3"})
-    tgt_agg["iso3"] = tgt_agg["iso3"].str.strip().str.upper()
-    tgt_agg["year"] = tgt_agg["year"].astype(int)
-    print(f"TGT aggregated: {len(tgt_agg)} country-year rows")
-    print(f"TGT countries: {sorted(tgt_agg['iso3'].unique())}")
-    print(f"TGT years: {sorted(tgt_agg['year'].unique())}")
+    # --- Sector-level aggregation ---
+    if len(sector_tgt) > 0:
+        sector_tgt["cluster"] = sector_tgt["sector_name"].map(SECTOR_TO_CLUSTER)
+        sector_tgt = sector_tgt.dropna(subset=["cluster"])
+        sector_agg = (
+            sector_tgt.groupby(["location_code", "year", "cluster"])
+            .agg(sector_tgt=("population", "sum"))
+            .reset_index()
+        )
+        sector_agg = sector_agg.rename(columns={"location_code": "iso3"})
+        sector_agg["iso3"] = sector_agg["iso3"].str.strip().str.upper()
+        sector_agg["year"] = sector_agg["year"].astype(int)
+        print(f"Sector-level TGT: {len(sector_agg)} iso3-year-cluster rows")
+    else:
+        sector_agg = pd.DataFrame(columns=["iso3", "year", "cluster", "sector_tgt"])
+
+    # --- Country-level fallback from Intersectoral ---
+    if len(inter_tgt) > 0:
+        country_tgt = (
+            inter_tgt.groupby(["location_code", "year"])
+            .agg(country_tgt=("population", "sum"))
+            .reset_index()
+        )
+        country_tgt = country_tgt.rename(columns={"location_code": "iso3"})
+        country_tgt["iso3"] = country_tgt["iso3"].str.strip().str.upper()
+        country_tgt["year"] = country_tgt["year"].astype(int)
+    else:
+        country_tgt = pd.DataFrame(columns=["iso3", "year", "country_tgt"])
+
+    print(f"Country-level TGT fallback: {len(country_tgt)} country-year rows")
 else:
-    tgt_agg = pd.DataFrame(columns=["iso3", "year", "country_tgt"])
+    sector_agg = pd.DataFrame(columns=["iso3", "year", "cluster", "sector_tgt"])
+    country_tgt = pd.DataFrame(columns=["iso3", "year", "country_tgt"])
     print("No TGT data available")
 
-# Compute each project's share of its country-year total budget
+# --- Budget share computation per sector within each country-year ---
+# Each project's share of its cluster's budget in the same country-year
+cluster_budget = (
+    projects_df.groupby(["iso3", "year", "cluster"])["requested_funds"]
+    .sum()
+    .reset_index()
+    .rename(columns={"requested_funds": "cluster_year_budget"})
+)
+projects_df = projects_df.merge(cluster_budget, on=["iso3", "year", "cluster"], how="left")
+projects_df["cluster_budget_share"] = (
+    projects_df["requested_funds"] / projects_df["cluster_year_budget"]
+)
+
+# Country-level budget share (fallback for unmatched sectors)
 country_yr_budget = (
     projects_df.groupby(["iso3", "year"])["requested_funds"]
     .sum()
     .reset_index()
     .rename(columns={"requested_funds": "country_year_budget"})
 )
-
 projects_df = projects_df.merge(country_yr_budget, on=["iso3", "year"], how="left")
 projects_df["budget_share"] = projects_df["requested_funds"] / projects_df["country_year_budget"]
 
-# Join country-level TGT and allocate proportionally
-# Debug: check overlap before merge
-proj_keys = set(zip(projects_df["iso3"], projects_df["year"]))
-tgt_keys = set(zip(tgt_agg["iso3"], tgt_agg["year"]))
-overlap = proj_keys & tgt_keys
-print(f"Project country-years: {len(proj_keys)}, TGT country-years: {len(tgt_keys)}, Overlap: {len(overlap)}")
-if len(overlap) == 0 and len(tgt_keys) > 0:
-    print(f"Sample project keys: {sorted(proj_keys)[:5]}")
-    print(f"Sample TGT keys: {sorted(tgt_keys)[:5]}")
+# --- Join sector TGT to projects by (iso3, year, cluster) ---
+projects_df = projects_df.merge(sector_agg, on=["iso3", "year", "cluster"], how="left")
+projects_df = projects_df.merge(country_tgt, on=["iso3", "year"], how="left")
 
-projects_df = projects_df.merge(tgt_agg, on=["iso3", "year"], how="left")
-projects_df["target_beneficiaries"] = (
-    projects_df["country_tgt"].fillna(0) * projects_df["budget_share"]
-).round(0)
+# Allocate: prefer sector-level, fall back to country-level
+projects_df["target_beneficiaries"] = np.where(
+    projects_df["sector_tgt"].notna() & (projects_df["sector_tgt"] > 0),
+    (projects_df["sector_tgt"] * projects_df["cluster_budget_share"]).round(0),
+    (projects_df["country_tgt"].fillna(0) * projects_df["budget_share"]).round(0),
+)
+
+# Budget revision ratio: how much was the budget revised from original request
+projects_df["budget_revision_ratio"] = np.where(
+    projects_df["orig_requested_funds"] > 0,
+    projects_df["requested_funds"] / projects_df["orig_requested_funds"],
+    1.0,
+)
 
 # Keep projects that received beneficiary allocation
 valid = projects_df[projects_df["target_beneficiaries"] > 0].copy()
+sector_matched = valid["sector_tgt"].notna().sum()
 print(f"Projects with allocated beneficiaries: {len(valid)} / {len(projects_df)}")
+print(f"  Sector-matched: {sector_matched}, Country-fallback: {len(valid) - sector_matched}")
 
 # COMMAND ----------
 
@@ -276,6 +344,17 @@ print(f"Projects with allocated beneficiaries: {len(valid)} / {len(projects_df)}
 
 valid["b2b_ratio"] = valid["target_beneficiaries"] / valid["requested_funds"]
 valid["cost_per_beneficiary"] = valid["requested_funds"] / valid["target_beneficiaries"]
+
+# Budget z-score within each cluster (how unusual is this project's budget?)
+cluster_stats = valid.groupby("cluster")["requested_funds"].agg(["mean", "std"]).reset_index()
+cluster_stats.columns = ["cluster", "cluster_mean_budget", "cluster_std_budget"]
+valid = valid.merge(cluster_stats, on="cluster", how="left")
+valid["budget_zscore"] = np.where(
+    valid["cluster_std_budget"] > 0,
+    (valid["requested_funds"] - valid["cluster_mean_budget"]) / valid["cluster_std_budget"],
+    0.0,
+)
+valid = valid.drop(columns=["cluster_mean_budget", "cluster_std_budget"])
 
 print(f"B2B ratio stats:")
 print(valid["b2b_ratio"].describe())
@@ -301,9 +380,37 @@ valid["b2b_percentile"] = valid.groupby("cluster")["b2b_ratio"].rank(pct=True)
 # Outlier: below 10th or above 90th percentile within cluster
 valid["is_outlier"] = (valid["b2b_percentile"] < 0.10) | (valid["b2b_percentile"] > 0.90)
 
-print(f"Outlier projects: {valid['is_outlier'].sum()} / {len(valid)} "
+print(f"Percentile outlier projects: {valid['is_outlier'].sum()} / {len(valid)} "
       f"({valid['is_outlier'].mean()*100:.1f}%)")
 print(f"Unique clusters: {valid['cluster'].nunique()}")
+
+# --- IsolationForest anomaly detection ---
+# Uses B2B-aware features to flag genuinely unusual projects
+from sklearn.ensemble import IsolationForest
+
+anomaly_features = ["b2b_ratio", "cost_per_beneficiary", "budget_zscore", "budget_revision_ratio"]
+X = valid[anomaly_features].copy()
+X = X.fillna(0).replace([np.inf, -np.inf], 0)
+
+iso_forest = IsolationForest(
+    n_estimators=200,
+    contamination=0.10,
+    random_state=42,
+)
+iso_forest.fit(X)
+
+# decision_function returns negative scores for anomalies; normalize to 0-1
+raw_scores = iso_forest.decision_function(X)
+valid["anomaly_score"] = 1 - (raw_scores - raw_scores.min()) / (raw_scores.max() - raw_scores.min() + 1e-10)
+
+# Update is_outlier to combine percentile and IsolationForest signals
+iso_labels = iso_forest.predict(X)  # -1 = anomaly, 1 = normal
+valid["is_outlier"] = valid["is_outlier"] | (iso_labels == -1)
+
+print(f"IsolationForest anomalies: {(iso_labels == -1).sum()} / {len(valid)} "
+      f"({(iso_labels == -1).mean()*100:.1f}%)")
+print(f"Combined outliers: {valid['is_outlier'].sum()} / {len(valid)} "
+      f"({valid['is_outlier'].mean()*100:.1f}%)")
 
 # COMMAND ----------
 
@@ -349,8 +456,9 @@ output_columns = [
     "project_id", "project_code", "project_name",
     "iso3", "country_name", "year",
     "cluster", "sector",
-    "requested_funds", "target_beneficiaries",
+    "requested_funds", "orig_requested_funds", "target_beneficiaries",
     "b2b_ratio", "cost_per_beneficiary",
+    "budget_zscore", "budget_revision_ratio", "anomaly_score",
     "b2b_percentile", "is_outlier", "cluster_median_b2b",
     "description", "objectives", "text_blob",
 ]
@@ -440,7 +548,7 @@ else:
 SYNC_COLUMNS = [
     "project_id", "project_code", "project_name",
     "iso3", "country_name", "cluster",
-    "b2b_ratio", "cost_per_beneficiary", "text_blob",
+    "b2b_ratio", "cost_per_beneficiary", "anomaly_score", "text_blob",
 ]
 
 try:
