@@ -151,7 +151,7 @@ The ACAPS API is **month-based**. Each call returns all crises for a specific mo
 
 **Primary data source — CSV:** A pre-generated CSV (`acaps_crises_2022_2026.csv`) contains all crises from Jan 2022–Dec 2026 (48 months). The Databricks notebook reads this CSV to avoid 48 API calls. Expected columns: `iso3`, `country_name`, `crisis_id`, `crisis_name`, `severity` (or `acaps_severity`), `year`, `month`, plus any ACAPS-specific fields. Split by month in the source; Databricks ingests and joins with funding/needs.
 
-**Stretch goal — Scheduled monthly refresh:** A job (e.g. Databricks Job or cron) runs on the 1st of each month to pull the previous month's crises via `GET /api/v1/inform-severity-index/{PrevMonth}{PrevYear}/` and append to `crisis_summary`. Requires `ACAPS_USERNAME`, `ACAPS_PASSWORD` in environment; obtain token via `POST /api/v1/token-auth/` before each API call.
+**Note:** No live polling. ACAPS data is ingested once via the `scripts/fetch_acaps_crises.py` script (run manually with credentials passed as CLI args). The generated CSV is used by Databricks. No credentials are stored in the project.
 
 #### HDX HAPI Funding Endpoint — Detail
 
@@ -850,7 +850,7 @@ The new globe endpoints (`/api/globe/crises`, `/api/globe/b2b`) query `crisis_su
 backend/
 ├── main.py                          # Updated lifespan, new routers
 ├── requirements.txt                 # Unchanged (or add google-generativeai)
-├── .env                             # DATABRICKS_HOST, DATABRICKS_TOKEN, WAREHOUSE_ID, ELEVENLABS_API_KEY, ACAPS_USERNAME, ACAPS_PASSWORD (stretch)
+├── .env                             # DATABRICKS_HOST, DATABRICKS_TOKEN, WAREHOUSE_ID, ELEVENLABS_API_KEY
 ├── routers/
 │   ├── globe.py                     # NEW — GET /crises, GET /b2b
 │   ├── benchmark.py                 # NEW — POST /benchmark
@@ -1398,10 +1398,4 @@ The frontend expects exactly this shape from `/api/globe/crises`:
 - [ ] Verify max 8 crises per country per month on globe
 - [ ] Test with known cases: Sudan, Yemen, Ukraine, Bangladesh
 
-### Phase 6: Stretch — Scheduled ACAPS Refresh
-
-- [ ] Create job to run on 1st of each month
-- [ ] Obtain ACAPS token via `POST /api/v1/token-auth/` with `ACAPS_USERNAME`, `ACAPS_PASSWORD`
-- [ ] Call `GET /api/v1/inform-severity-index/{PrevMonth}{PrevYear}/` for previous month
-- [ ] Append/upsert new rows into `crisis_summary`
 
