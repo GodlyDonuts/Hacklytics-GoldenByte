@@ -9,12 +9,17 @@ from contextlib import asynccontextmanager
 # Load .env from backend/ when running from project root
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
-from .routers import ask, benchmark, countries, genie, globe, report
-from .services.data_loader import load_all_data
+from .routers import ask, benchmark, genie, globe, report
+from .services.cache import warm_cache
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await warm_cache()
+    yield
 
-app = FastAPI(title="Crisis Topography API")
+
+app = FastAPI(title="Crisis Topography API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
