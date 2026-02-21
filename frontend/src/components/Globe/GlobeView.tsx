@@ -3,115 +3,177 @@
 /**
  * GlobeView.tsx
  *
- * Main 3D globe component. It:
- * - Fetches crisis data from the API (lib/api.ts getGlobeCrises) using year/month from GlobeContext.
- * - Renders a globe.gl instance with: country outlines (GeoJSON), hex bin “bars” (from that data),
- *   an optional floating HTML label for a selected country, and optional comparison arcs.
- * - Listens to GlobeContext for: filters (year, month), viewMode (severity | funding-gap | anomalies),
- *   flyToCoordinates (camera), and comparisonData (arc source/target).
- * - Data flow: API → data (GlobeCountry[]) → hexBinPointsData (HexPoint[]) → hex layer; selectedPoint
- *   and comparisonData drive the label and arcs.
+ * Main 3D globe component rendering crisis data as raised country polygons.
+ * Countries are elevated proportional to average crisis severity (polygon altitude),
+ * colored by a continuous gradient, with atmosphere glow and smooth transitions.
+ *
+ * Hover over a country to spotlight it (flatten/dim all others).
+ * Voice agent fly-to also spotlights the nearest country.
  */
 
-// -----------------------------------------------------------------------------
-// IMPORTS
-// -----------------------------------------------------------------------------
-// React hooks for state, memoization, effects, and DOM refs
-import React, { useState, useMemo, useEffect, useRef } from "react";
-// 3D globe library: Globe = constructor, GlobeInstance = type for the globe instance
+import { useState, useMemo, useEffect, useRef } from "react";
 import Globe, { GlobeInstance } from "globe.gl";
-// Child components: camera/controls overlay and filter modal
 import GlobeControls from "./GlobeControls";
-// Global state: selected country, fly-to target, comparison arcs, view mode, filters
 import { useGlobeContext } from "@/context/GlobeContext";
-// API: fetches crisis data by year/month; GlobeCountry = shape of each country in the response
 import { getGlobeCrises, GlobeCountry } from "@/lib/api";
 
-// -----------------------------------------------------------------------------
-// SEVERITY → COLOR MAPPING (used for hex bin bars and altitude)
-// -----------------------------------------------------------------------------
-// Maps severity band 1–5 to hex colors; used for both bar color and bar height
-const SEVERITY_COLORS: Record<number, string> = {
-  1: "#3b82f6", // blue   (lowest)
-  2: "#22c55e", // green
-  3: "#eab308", // yellow
-  4: "#f97316", // orange
-  5: "#ef4444", // red    (highest)
-};
+// Continuous color gradient stops: severity 1-5 mapped linearly to 0-1.
+const COLOR_STOPS: [number, number, number, number][] = [
+  [0.0, 30, 100, 240],   // deep blue (severity 1)
+  [0.2, 0, 200, 210],    // cyan-teal
+  [0.4, 40, 210, 80],    // green
+  [0.6, 240, 200, 0],    // yellow
+  [0.8, 250, 120, 20],   // orange
+  [1.0, 230, 40, 40],    // red (severity 5)
+];
 
-/** Clamps severity to 1–5 and returns the corresponding color from SEVERITY_COLORS. */
-function severityColor(severityBand: number): string {
-  const band = Math.min(5, Math.max(1, Math.round(severityBand)));
-  return SEVERITY_COLORS[band] ?? SEVERITY_COLORS[1];
+const NEUTRAL_CAP = "rgba(255, 255, 255, 0.03)";
+const NEUTRAL_SIDE = "rgba(255, 255, 255, 0.02)";
+const DIMMED_CAP = "rgba(255, 255, 255, 0.06)";
+const DIMMED_SIDE = "rgba(255, 255, 255, 0.03)";
+
+const GEOJSON_URL =
+  "https://raw.githubusercontent.com/vasturiano/globe.gl/master/example/datasets/ne_110m_admin_0_countries.geojson";
+
+function severityToT(severity: number): number {
+  return Math.min(1, Math.max(0, (severity - 1) / 4));
 }
 
-/**
- * From a hex bin’s aggregated data, returns a severity band 1–5 for color/altitude.
- * - If the bin has points: uses average severity of those points.
- * - Otherwise: approximates from sumWeight (used when globe.gl merges bins).
- */
-function getSeverityBand(d: { points?: unknown[]; sumWeight: number }): number {
-  const points = (d.points || []) as HexPoint[];
-  if (points.length > 0) {
-    const avg = points.reduce((s, p) => s + p.severity, 0) / points.length;
-    return Math.min(5, Math.max(1, Math.round(avg)));
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+function sampleGradient(t: number): [number, number, number] {
+  const tc = Math.min(1, Math.max(0, t));
+  for (let i = 0; i < COLOR_STOPS.length - 1; i++) {
+    const [pos0, r0, g0, b0] = COLOR_STOPS[i];
+    const [pos1, r1, g1, b1] = COLOR_STOPS[i + 1];
+    if (tc >= pos0 && tc <= pos1) {
+      const local = (tc - pos0) / (pos1 - pos0);
+      return [
+        Math.round(lerp(r0, r1, local)),
+        Math.round(lerp(g0, g1, local)),
+        Math.round(lerp(b0, b1, local)),
+      ];
+    }
   }
-  const approxSeverity = 1 + Math.min(4, d.sumWeight);
-  return Math.min(5, Math.max(1, Math.round(approxSeverity)));
+  const last = COLOR_STOPS[COLOR_STOPS.length - 1];
+  return [last[1], last[2], last[3]];
 }
 
-/**
- * Shape of one “point” fed to the hex bin layer. Built from GlobeCountry in useMemo below.
- * - lat, lng: position on globe
- * - pop: weight for binning (value depends on viewMode: severity, funding-gap, or anomalies)
- * - iso: country ISO3 code
- * - severity, fundingGap, anomalyScore: used for tooltips and for getSeverityBand when bins merge
- */
-export type HexPoint = { lat: number; lng: number; pop: number; iso: string; severity: number; fundingGap: number; anomalyScore: number };
+function capColor(severity: number): string {
+  const [r, g, b] = sampleGradient(severityToT(severity));
+  return `rgba(${r}, ${g}, ${b}, 0.75)`;
+}
 
-// -----------------------------------------------------------------------------
-// GLOBE VIEW COMPONENT
-// -----------------------------------------------------------------------------
+function sideColor(severity: number): string {
+  const [r, g, b] = sampleGradient(severityToT(severity));
+  return `rgba(${Math.round(r * 0.4)}, ${Math.round(g * 0.4)}, ${Math.round(b * 0.4)}, 0.2)`;
+}
+
+interface CrisisFeature {
+  type: string;
+  properties: Record<string, unknown>;
+  geometry: Record<string, unknown>;
+  __severity: number;
+  __hasCrisis: boolean;
+}
+
 export default function GlobeView() {
-  // Refs
-  const containerRef = useRef<HTMLDivElement>(null);   // DOM node that holds the canvas
-  const globeRef = useRef<GlobeInstance | null>(null); // globe.gl instance for layers and camera
+  const containerRef = useRef<HTMLDivElement>(null);
+  const globeRef = useRef<GlobeInstance | null>(null);
+  const geoJsonRef = useRef<CrisisFeature[] | null>(null);
 
-  // Local state
-  const [selectedPoint, setSelectedPoint] = useState<GlobeCountry | null>(null); // Country used for the floating HTML label
-  const [data, setData] = useState<GlobeCountry[]>([]);                            // Raw API response: list of countries with crises
+  const [data, setData] = useState<GlobeCountry[]>([]);
+  const [geoReady, setGeoReady] = useState(false);
+  const [hoveredIso, setHoveredIso] = useState<string | null>(null);
 
-  // From GlobeContext (see context/GlobeContext.tsx): drives fly-to, arcs, view mode, and filters
-  const { selectedCountry, setSelectedCountry, flyToCoordinates, comparisonData, viewMode, filters } = useGlobeContext();
+  const { selectedCountry, flyToCoordinates, comparisonData, viewMode, filters } =
+    useGlobeContext();
 
-  // -------------------------------------------------------------------------
-  // DATA FETCH: load crisis data when year/month filters change
-  // -------------------------------------------------------------------------
-  // Source: getGlobeCrises(year, month?) in lib/api.ts → returns { countries: GlobeCountry[] }
-  // Receives: filters.year, filters.month from GlobeContext
+  // Fetch crisis data when year/month filters change
   useEffect(() => {
     if (!filters.year) return;
-
     getGlobeCrises(filters.year, filters.month)
       .then((res) => {
-        if (res && res.countries) {
-          setData(res.countries);
-        }
+        setData(res && res.countries ? res.countries : []);
       })
       .catch((err) => console.error("Failed to load globe crises data:", err));
   }, [filters.year, filters.month]);
 
-  // -------------------------------------------------------------------------
-  // GLOBE INIT: create globe instance once, size to container, cleanup on unmount
-  // -------------------------------------------------------------------------
-  // Runs once on mount. Creates the 3D globe inside containerRef, sets textures and dimensions,
-  // wires ResizeObserver so the globe resizes with the container.
+  // Fetch GeoJSON country shapes once
+  useEffect(() => {
+    fetch(GEOJSON_URL)
+      .then((res) => res.json())
+      .then((geo) => {
+        geoJsonRef.current = geo.features as CrisisFeature[];
+        setGeoReady(true);
+      })
+      .catch((err) => console.error("Failed to load GeoJSON:", err));
+  }, []);
+
+  // Build lookup from iso3 -> { severity, lat, lng }
+  const countryMetrics = useMemo(() => {
+    const map = new Map<string, { severity: number; lat: number; lng: number }>();
+    for (const country of data) {
+      let totalSeverity = 0;
+      let count = 0;
+      country.crises?.forEach((c) => {
+        totalSeverity += c.acaps_severity || 0;
+        count += 1;
+      });
+      if (count > 0) {
+        map.set(country.iso3, {
+          severity: totalSeverity / count,
+          lat: country.lat,
+          lng: country.lng,
+        });
+      }
+    }
+    return map;
+  }, [data]);
+
+  // When flyToCoordinates is set, find the nearest country ISO to spotlight
+  const spotlightIso = useMemo(() => {
+    if (!flyToCoordinates) return null;
+    let bestIso: string | null = null;
+    let bestDist = Infinity;
+    for (const [iso, m] of countryMetrics) {
+      const dLat = m.lat - flyToCoordinates.lat;
+      const dLng = m.lng - flyToCoordinates.lng;
+      const dist = dLat * dLat + dLng * dLng;
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIso = iso;
+      }
+    }
+    return bestIso;
+  }, [flyToCoordinates, countryMetrics]);
+
+  // Merge GeoJSON features with crisis severity data
+  const polygonFeatures = useMemo((): CrisisFeature[] => {
+    if (!geoJsonRef.current) return [];
+    return geoJsonRef.current.map((feat) => {
+      const iso = feat.properties.ISO_A3 as string;
+      const metrics = countryMetrics.get(iso);
+      return {
+        ...feat,
+        __severity: metrics?.severity ?? 0,
+        __hasCrisis: metrics !== undefined,
+      };
+    });
+  }, [countryMetrics, geoReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Globe init
   useEffect(() => {
     if (!containerRef.current) return;
 
     const globe = new Globe(containerRef.current)
       .globeImageUrl("//unpkg.com/three-globe/example/img/earth-night.jpg")
       .backgroundImageUrl("//unpkg.com/three-globe/example/img/night-sky.png")
+      .showAtmosphere(true)
+      .atmosphereColor("#00d4ff")
+      .atmosphereAltitude(0.18)
       .width(containerRef.current.clientWidth)
       .height(containerRef.current.clientHeight);
 
@@ -131,122 +193,66 @@ export default function GlobeView() {
     };
   }, []);
 
-  // -------------------------------------------------------------------------
-  // HEX BIN INPUT: convert API countries → flat array of HexPoints for the hex layer
-  // -------------------------------------------------------------------------
-  // Input: `data` (GlobeCountry[] from API), `viewMode` from GlobeContext.
-  // Each GlobeCountry has: lat, lng, iso3, country_name, crises[] (each crisis has acaps_severity, funding_gap_usd, people_in_need, avg_b2b_ratio).
-  // Output: one HexPoint per country. `pop` is the “weight” used for binning and varies by viewMode.
-  const hexBinPointsData = useMemo((): HexPoint[] => {
-    return data.map((country) => {
-      let totalSeverity = 0;
-      let totalFundingGap = 0;
-      let totalPeopleInNeed = 0;
-      let sumB2B = 0;
-      let count = 0;
-
-      country.crises?.forEach((crisis) => {
-        totalSeverity += crisis.acaps_severity || 0;
-        totalFundingGap += crisis.funding_gap_usd || 0;
-        totalPeopleInNeed += crisis.people_in_need || 0;
-        sumB2B += crisis.b2b_ratio || 0;
-        count += 1;
-      });
-
-      const avgSeverity = count > 0 ? totalSeverity / count : 0;
-      const fundingGap = totalFundingGap;
-      const avgB2B = count > 0 ? sumB2B / count : 0;
-
-      // `pop` = weight for hex bin aggregation. Which metric is used depends on viewMode from context.
-      let pop = 0;
-      if (count > 0) {
-        if (viewMode === "severity") {
-          pop = avgSeverity;
-        } else if (viewMode === "funding-gap") {
-          pop = Math.min(totalFundingGap / 1_000_000_000, 1.0);
-        } else if (viewMode === "anomalies") {
-          pop = Math.min(avgB2B / 100, 1.0);
-        }
-      }
-
-      return {
-        lat: country.lat,
-        lng: country.lng,
-        pop,
-        iso: country.iso3,
-        severity: avgSeverity,
-        fundingGap,
-        anomalyScore: avgB2B,
-      };
-    });
-  }, [data, viewMode]);
-
-  // -------------------------------------------------------------------------
-  // GLOBE LAYERS: polygons (country borders), hex bins, HTML label, comparison arcs
-  // -------------------------------------------------------------------------
-  // Runs when data, hexBinPointsData, selectedPoint, comparisonData, or viewMode change.
-  // All layer data is received from: (1) API → data, (2) derived hexBinPointsData, (3) GlobeContext (comparisonData), (4) local selectedPoint.
+  // Update polygon layers
   useEffect(() => {
-    if (!globeRef.current || !data.length) return;
     const globe = globeRef.current;
+    if (!globe) return;
 
-    // --- Country outlines (GeoJSON) ---
-    // Fetched from external URL once; draws transparent polygons with white borders on the globe.
-    fetch('https://raw.githubusercontent.com/vasturiano/globe.gl/master/example/datasets/ne_110m_admin_0_countries.geojson').then(res => res.json()).then(countries => {
-      globe
-        .polygonsData(countries.features)
-        .polygonCapColor(() => 'rgba(0, 0, 0, 0)')
-        .polygonSideColor(() => 'rgba(255, 255, 255, 0.1)')
-        .polygonStrokeColor(() => '#ffffff')
-        .polygonAltitude(0.01);
-    });
+    if (polygonFeatures.length === 0) {
+      globe.polygonsData([]);
+      globe.arcsData([]);
+      return;
+    }
 
-    // --- Hex bin layer (colored bars on the globe) ---
-    // Data source: hexBinPointsData (one HexPoint per country, built from API data + viewMode).
-    // globe.gl bins points by lat/lng, aggregates by "pop" weight; we color/height by severity via getSeverityBand.
+    // Hover takes priority over voice-agent spotlight
+    const spotlight = hoveredIso ?? spotlightIso;
+
     globe
-      .heatmapsData([])
-      .hexBinPointsData(hexBinPointsData)
-      .hexBinPointLat("lat")
-      .hexBinPointLng("lng")
-      .hexBinPointWeight("pop")
-      .hexAltitude((d) => (getSeverityBand(d) - 1) * 0.02 + 0.02)  // Bar height from severity 1–5
-      .hexBinResolution(4)
-      .hexTopColor((d) => severityColor(getSeverityBand(d)))
-      .hexSideColor((d) => severityColor(getSeverityBand(d)))
-      .hexBinMerge(true)
-      .enablePointerInteraction(false);
-
-    // --- Floating HTML label (tooltip for selected country) ---
-    // Data source: selectedPoint (GlobeCountry | null). When set, one DOM label is shown at that country’s lat/lng.
-    // Label content: country name, ISO3, crisis count, and “People in Need” from first crisis.
-    globe
-      .htmlElementsData(selectedPoint ? [selectedPoint] : [])
-      .htmlLat((o) => (o as GlobeCountry).lat || 0)
-      .htmlLng((o) => (o as GlobeCountry).lng || 0)
-      .htmlAltitude(0.2)
-      .htmlElement((obj) => {
-        const country = obj as GlobeCountry;
-        let targetCrisis = country.crises && country.crises.length > 0 ? country.crises[0] : null;
-        let pin = targetCrisis ? (targetCrisis.people_in_need / 1_000_000) : 0;
-        let pinDisplay = pin > 0 ? `${pin.toFixed(1)}M` : 'Unknown';
-
-        const el = document.createElement("div");
-        el.className = "point-label";
-        el.innerHTML = `
-          <div><strong>${country.country_name} (${country.iso3})</strong></div>
-          <div>Crises: ${country.crises?.length || 0}</div>
-          <div>People in Need: ${pinDisplay}</div>
-        `;
-        return el;
+      .polygonsData(polygonFeatures)
+      .polygonAltitude((d) => {
+        const feat = d as CrisisFeature;
+        const iso = feat.properties.ISO_A3 as string;
+        if (!feat.__hasCrisis) return 0.005;
+        if (spotlight && iso !== spotlight) return 0.005;
+        return 0.02 + severityToT(feat.__severity) * 0.28;
       })
-      .htmlElementVisibilityModifier((el, isVisible) => {
-        (el as HTMLElement).style.opacity = isVisible ? "1" : "0";
-      });
+      .polygonCapColor((d) => {
+        const feat = d as CrisisFeature;
+        const iso = feat.properties.ISO_A3 as string;
+        if (!feat.__hasCrisis) return NEUTRAL_CAP;
+        if (spotlight && iso !== spotlight) return DIMMED_CAP;
+        return capColor(feat.__severity);
+      })
+      .polygonSideColor((d) => {
+        const feat = d as CrisisFeature;
+        const iso = feat.properties.ISO_A3 as string;
+        if (!feat.__hasCrisis) return NEUTRAL_SIDE;
+        if (spotlight && iso !== spotlight) return DIMMED_SIDE;
+        return sideColor(feat.__severity);
+      })
+      .polygonStrokeColor((d) => {
+        const feat = d as CrisisFeature;
+        const iso = feat.properties.ISO_A3 as string;
+        if (spotlight && iso !== spotlight) return "rgba(255, 255, 255, 0.08)";
+        return "rgba(255, 255, 255, 0.25)";
+      })
+      .polygonsTransitionDuration(300)
+      .onPolygonHover((poly) => {
+        if (!poly) {
+          setHoveredIso(null);
+          return;
+        }
+        const feat = poly as CrisisFeature;
+        if (feat.__hasCrisis) {
+          setHoveredIso(feat.properties.ISO_A3 as string);
+        } else {
+          setHoveredIso(null);
+        }
+      })
+      .polygonLabel(() => "")
+      .enablePointerInteraction(true);
 
-    // --- Comparison arcs (source → target line) ---
-    // Data source: comparisonData from GlobeContext (set elsewhere, e.g. when comparing two countries).
-    // If present, one arc is drawn; otherwise arcs are cleared.
+    // Comparison arcs
     if (comparisonData) {
       globe
         .arcsData([
@@ -255,12 +261,12 @@ export default function GlobeView() {
             startLng: comparisonData.sourceLng,
             endLat: comparisonData.targetLat,
             endLng: comparisonData.targetLng,
-            color: ['#00FF88', '#00DDFF']
-          }
+            color: ["#00FF88", "#00DDFF"],
+          },
         ])
-        .arcStartLat(d => (d as any).startLat)
-        .arcStartLng(d => (d as any).startLng)
-        .arcEndLat(d => (d as any).endLat)
+        .arcStartLat((d) => (d as any).startLat)
+        .arcStartLng((d) => (d as any).startLng)
+        .arcEndLat((d) => (d as any).endLat)
         .arcEndLng((d: any) => d.endLng)
         .arcColor((d: any) => d.color)
         .arcDashLength(0.4)
@@ -271,40 +277,51 @@ export default function GlobeView() {
     } else {
       globe.arcsData([]);
     }
-  }, [data, hexBinPointsData, selectedPoint, setSelectedCountry, comparisonData, viewMode]);
+  }, [polygonFeatures, comparisonData, viewMode, spotlightIso, hoveredIso, countryMetrics]);
 
-  // -------------------------------------------------------------------------
-  // CAMERA: fly to coordinates when GlobeContext updates flyToCoordinates
-  // -------------------------------------------------------------------------
-  // Source: flyToCoordinates from GlobeContext (e.g. set when user picks “fly to” a country).
-  // Animates the globe camera to the given lat/lng/altitude over 2 seconds.
+  // Camera: fly to coordinates from context
   useEffect(() => {
     if (flyToCoordinates && globeRef.current) {
       globeRef.current.pointOfView(
         {
           lat: flyToCoordinates.lat,
           lng: flyToCoordinates.lng,
-          altitude: flyToCoordinates.altitude ?? 1.5
+          altitude: flyToCoordinates.altitude ?? 1.5,
         },
         2000
       );
     }
   }, [flyToCoordinates]);
 
-  // -------------------------------------------------------------------------
-  // RENDER: container, globe canvas, selected badge, controls, filters modal
-  // -------------------------------------------------------------------------
+  // Look up hovered country info for the tooltip
+  const hoveredInfo = useMemo(() => {
+    if (!hoveredIso) return null;
+    const feat = polygonFeatures.find((f) => f.properties.ISO_A3 === hoveredIso);
+    if (!feat || !feat.__hasCrisis) return null;
+    const metrics = countryMetrics.get(hoveredIso);
+    return {
+      name: (feat.properties.NAME as string) ?? hoveredIso,
+      iso: hoveredIso,
+      severity: metrics?.severity ?? 0,
+    };
+  }, [hoveredIso, polygonFeatures, countryMetrics]);
+
   return (
     <div className="relative w-full h-screen">
-      {/* DOM node that globe.gl mounts its canvas into */}
       <div ref={containerRef} className="w-full h-full" />
-      {/* Badge showing currently selected country (from context); only visible when selectedCountry is set */}
-      {selectedCountry && (
-        <div className="absolute bottom-4 right-4 rounded bg-black/70 px-3 py-2 text-sm text-white">
+      {/* Hovered country tooltip -- bottom right corner */}
+      {hoveredInfo && (
+        <div className="absolute bottom-4 right-4 rounded-lg border border-[#00d4ff]/30 bg-[#1a1d21]/90 px-4 py-3 text-sm text-white/90 backdrop-blur-sm">
+          <div className="font-semibold text-[#00e5ff]">{hoveredInfo.name} ({hoveredInfo.iso})</div>
+          <div className="text-xs text-white/60 mt-1">Severity: {hoveredInfo.severity.toFixed(1)}</div>
+        </div>
+      )}
+      {/* Selected country badge (from voice agent) */}
+      {selectedCountry && !hoveredInfo && (
+        <div className="absolute bottom-4 right-4 rounded-lg border border-[#00d4ff]/30 bg-[#1a1d21]/90 px-4 py-3 text-sm text-white/90 backdrop-blur-sm">
           Selected: {selectedCountry}
         </div>
       )}
-      {/* Camera controls (e.g. reset view) that need access to the globe instance */}
       <GlobeControls globeRef={globeRef} />
     </div>
   );
