@@ -1,26 +1,274 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* ═══════════════════════════════════════════
+   SCROLL-TRIGGERED FULL-PAGE THEME PHASES
+   
+   CSS custom properties (--phase-*) are updated on <html> by
+   ThemeProvider.tsx based on scroll position.  Because every
+   component reads from these variables, the ENTIRE page shifts
+   color together — navbar, background, text, borders.
+   
+   The transition-duration on <html> controls how fast the phase
+   change animates.  0.6s feels like sphinx.ai's smooth shifts.
+   ═══════════════════════════════════════════ */
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-background: var(--phase-bg);
+  --color-foreground: var(--phase-text);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  scroll-behavior: smooth;
+  /* Animate ALL --phase-* variable consumers via color transitions */
+  transition: background-color 0.6s ease, color 0.6s ease;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--phase-bg);
+  color: var(--phase-text);
+  font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.6s ease, color 0.6s ease;
+}
+
+/* ═══════════════════════════════════════════
+   BACKGROUND GRID — uses phase variable
+   ═══════════════════════════════════════════ */
+.bg-grid {
+  background-image:
+    linear-gradient(var(--phase-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--phase-grid-line) 1px, transparent 1px);
+  background-size: 80px 80px;
+}
+
+/* ═══════════════════════════════════════════
+   WINDOW FRAME — reads from phase variables
+   ═══════════════════════════════════════════ */
+.window-frame {
+  background: var(--phase-window-bg);
+  border: 1px solid var(--phase-window-border);
+  border-radius: 16px;
+  overflow: hidden;
+  transition: background-color 0.6s ease, border-color 0.6s ease;
+}
+
+.window-dots {
+  display: flex;
+  gap: 6px;
+  padding: 14px 18px;
+}
+
+.window-dots span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--phase-window-dot);
+  transition: background-color 0.6s ease;
+}
+
+/* ═══════════════════════════════════════════
+   TYPOGRAPHY
+   ═══════════════════════════════════════════ */
+.heading-massive {
+  font-size: clamp(3.5rem, 8vw, 7.5rem);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  color: var(--phase-text);
+  transition: color 0.6s ease;
+}
+
+.heading-large {
+  font-size: clamp(2rem, 4vw, 3.5rem);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+  color: var(--phase-text);
+  transition: color 0.6s ease;
+}
+
+.heading-section {
+  font-size: clamp(1.5rem, 3vw, 2.25rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--phase-text);
+  transition: color 0.6s ease;
+}
+
+.body-large {
+  font-size: 1.125rem;
+  line-height: 1.7;
+  color: var(--phase-text-secondary);
+  transition: color 0.6s ease;
+}
+
+.label-caps {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--phase-text-muted);
+  transition: color 0.6s ease;
+}
+
+/* ═══════════════════════════════════════════
+   DOT CLUSTER — section divider
+   ═══════════════════════════════════════════ */
+.dot-cluster {
+  display: grid;
+  grid-template-columns: repeat(2, 6px);
+  gap: 4px;
+}
+
+.dot-cluster span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--phase-text-muted);
+  transition: background-color 0.6s ease;
+}
+
+/* ═══════════════════════════════════════════
+   PHASE-AWARE UTILITIES — for inline use
+   ═══════════════════════════════════════════ */
+.phase-bg {
+  background-color: var(--phase-bg);
+  transition: background-color 0.6s ease;
+}
+
+.phase-bg-surface {
+  background-color: var(--phase-bg-surface);
+  transition: background-color 0.6s ease;
+}
+
+.phase-bg-elevated {
+  background-color: var(--phase-bg-elevated);
+  transition: background-color 0.6s ease;
+}
+
+.phase-text {
+  color: var(--phase-text);
+  transition: color 0.6s ease;
+}
+
+.phase-text-secondary {
+  color: var(--phase-text-secondary);
+  transition: color 0.6s ease;
+}
+
+.phase-text-muted {
+  color: var(--phase-text-muted);
+  transition: color 0.6s ease;
+}
+
+.phase-accent {
+  color: var(--phase-accent);
+  transition: color 0.6s ease;
+}
+
+.phase-border {
+  border-color: var(--phase-border);
+  transition: border-color 0.6s ease;
+}
+
+/* ═══════════════════════════════════════════
+   SCROLLBAR
+   ═══════════════════════════════════════════ */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--phase-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--phase-text-muted);
+  border-radius: 3px;
+  opacity: 0.3;
+}
+
+/* ═══════════════════════════════════════════
+   AURORA ANIMATIONS (globe page)
+   ═══════════════════════════════════════════ */
+@keyframes aurora-1 {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+    opacity: 0.6;
+  }
+  50% {
+    transform: translateY(-2vh) scale(1.1);
+    opacity: 0.9;
+  }
+}
+
+@keyframes aurora-2 {
+  0%, 100% {
+    transform: translateY(0) scale(1) translateX(0);
+    opacity: 0.5;
+  }
+  50% {
+    transform: translateY(-1.5vh) scale(1.05) translateX(3vw);
+    opacity: 0.8;
+  }
+}
+
+@keyframes aurora-3 {
+  0%, 100% {
+    transform: translateY(0) scale(1) translateX(0);
+    opacity: 0.6;
+  }
+  50% {
+    transform: translateY(-2.5vh) scale(1.15) translateX(-3vw);
+    opacity: 0.9;
+  }
+}
+
+@keyframes pulse-soft {
+  0%, 100% {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+}
+
+.aurora-1 {
+  animation: aurora-1 6s infinite ease-in-out;
+}
+
+.aurora-2 {
+  animation: aurora-2 8s infinite ease-in-out;
+}
+
+.aurora-3 {
+  animation: aurora-3 10s infinite ease-in-out;
+}
+
+.pulse-soft {
+  animation: pulse-soft 4s infinite ease-in-out;
+}
+
+/* Screen-space label for globe point (2D overlay, not on globe surface) */
+.point-label {
+  padding: 6px 10px;
+  background: rgba(249, 115, 22, 0.95);
+  border: 1px solid #000;
+  border-radius: 4px;
+  color: #000;
+  font-size: 12px;
+  font-family: var(--font-mono), monospace;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(-50%, -100%);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+.point-label div {
+  line-height: 1.35;
 }

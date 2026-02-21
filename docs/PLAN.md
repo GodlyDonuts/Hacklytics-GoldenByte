@@ -162,8 +162,7 @@ Render flagged projects as points with radius proportional to anomaly score.
   pointLabel={(d) => `
     <b>${d.projectCode}</b><br/>
     Budget: $${d.budget.toLocaleString()}<br/>
-    Beneficiaries: ${d.beneficiaries.toLocaleString()}<br/>
-    Cost/Person: $${d.costPerPerson.toFixed(2)}<br/>
+    Budget Z-Score: ${d.budgetZscore.toFixed(2)}<br/>
     Anomaly Score: ${d.anomalyScore.toFixed(2)}
   `}
 />
@@ -547,7 +546,19 @@ backend/
 
 ### 4.2 Notebook 1 — Data Ingestion
 
-Create a Databricks notebook that pulls from both APIs and writes to Delta tables.
+Create a Databricks notebook that pulls from HPC Tools API and HDX HAPI and writes to Delta tables in the `workspace.default` namespace.
+
+**Data sources:**
+
+| Data | Source | Endpoint |
+|---|---|---|
+| HRP Plans | HPC Tools API | `GET /plan/year/{year}` |
+| Funding | HDX HAPI | `GET /coordination-context/funding` |
+| Humanitarian Needs | HDX HAPI | `GET /affected-people/humanitarian-needs` |
+| Population | HDX HAPI | `GET /geography-infrastructure/baseline-population` |
+| Projects | HPC Tools API | `GET /project/plan/{planId}` |
+
+All HDX HAPI calls use `reference_period_start_min=2020-01-01` date filtering and `limit=10000` page size for efficient pagination.
 
 ```python
 # Notebook: 01_data_ingestion
@@ -559,28 +570,39 @@ HPC_BASE = "https://api.hpc.tools/v1/public"
 HDX_BASE = "https://hapi.humdata.org/api/v2"
 APP_ID = base64.b64encode(b"Haxlytics:team@mail.com").decode()
 
-# --- Fetch HRP plans for years 2020-2025 ---
+# --- Fetch HRP plans for years 2020-2026 ---
 all_plans = []
-for year in range(2020, 2026):
+for year in range(2020, 2027):
     resp = requests.get(f"{HPC_BASE}/plan/year/{year}")
     if resp.ok:
         all_plans.extend(resp.json().get("data", []))
 
 plans_df = spark.createDataFrame(pd.DataFrame(all_plans))
-plans_df.write.format("delta").mode("overwrite").saveAsTable("crisis.plans")
+plans_df.write.format("delta").mode("overwrite").saveAsTable("workspace.default.plans")
 
-# --- Fetch funding flows grouped by country ---
-all_flows = []
-for year in range(2020, 2026):
-    resp = requests.get(f"{HPC_BASE}/fts/flow", params={"year": year, "groupby": "Country"})
-    if resp.ok:
-        report = resp.json().get("data", {}).get("report3", {}).get("rows", [])
-        for row in report:
-            row["year"] = year
-            all_flows.append(row)
+# --- Fetch funding data from HDX HAPI ---
+# Uses /coordination-context/funding (NOT HPC FTS /fts/flow)
+# Returns: funding_usd, requirements_usd, funding_pct, location_code, location_name
+all_funding = []
+offset = 0
+while True:
+    resp = requests.get(
+        f"{HDX_BASE}/coordination-context/funding",
+        params={
+            "app_identifier": APP_ID,
+            "limit": 10000,
+            "offset": offset,
+            "reference_period_start_min": "2020-01-01",
+        }
+    )
+    data = resp.json().get("data", [])
+    if not data:
+        break
+    all_funding.extend(data)
+    offset += 10000
 
-flows_df = spark.createDataFrame(pd.DataFrame(all_flows))
-flows_df.write.format("delta").mode("overwrite").saveAsTable("crisis.funding_flows")
+funding_df = spark.createDataFrame(pd.DataFrame(all_funding))
+funding_df.write.format("delta").mode("overwrite").saveAsTable("workspace.default.funding")
 
 # --- Fetch humanitarian needs from HDX HAPI ---
 all_needs = []
@@ -588,24 +610,43 @@ offset = 0
 while True:
     resp = requests.get(
         f"{HDX_BASE}/affected-people/humanitarian-needs",
-        params={"app_identifier": APP_ID, "limit": 1000, "offset": offset}
+        params={
+            "app_identifier": APP_ID,
+            "limit": 10000,
+            "offset": offset,
+            "reference_period_start_min": "2020-01-01",
+        }
     )
     data = resp.json().get("data", [])
     if not data:
         break
     all_needs.extend(data)
-    offset += 1000
+    offset += 10000
 
 needs_df = spark.createDataFrame(pd.DataFrame(all_needs))
-needs_df.write.format("delta").mode("overwrite").saveAsTable("crisis.humanitarian_needs")
+needs_df.write.format("delta").mode("overwrite").saveAsTable("workspace.default.humanitarian_needs")
 
 # --- Fetch population baselines ---
-resp = requests.get(
-    f"{HDX_BASE}/geography-infrastructure/baseline-population",
-    params={"app_identifier": APP_ID, "limit": 10000}
-)
-pop_df = spark.createDataFrame(pd.DataFrame(resp.json().get("data", [])))
-pop_df.write.format("delta").mode("overwrite").saveAsTable("crisis.population")
+all_pop = []
+offset = 0
+while True:
+    resp = requests.get(
+        f"{HDX_BASE}/geography-infrastructure/baseline-population",
+        params={
+            "app_identifier": APP_ID,
+            "limit": 10000,
+            "offset": offset,
+            "reference_period_start_min": "2020-01-01",
+        }
+    )
+    data = resp.json().get("data", [])
+    if not data:
+        break
+    all_pop.extend(data)
+    offset += 10000
+
+pop_df = spark.createDataFrame(pd.DataFrame(all_pop))
+pop_df.write.format("delta").mode("overwrite").saveAsTable("workspace.default.population")
 ```
 
 ### 4.3 Notebook 2 — Mismatch Detection Engine
@@ -618,9 +659,9 @@ This is the core analytical model. It computes a **mismatch score** per country-
 from pyspark.sql import functions as F
 
 # --- Load tables ---
-needs = spark.table("crisis.humanitarian_needs")
-flows = spark.table("crisis.funding_flows")
-plans = spark.table("crisis.plans")
+needs = spark.table("workspace.default.humanitarian_needs")
+funding = spark.table("workspace.default.funding")
+plans = spark.table("workspace.default.plans")
 
 # --- Country-Level Mismatch ---
 # Aggregate severity: total people in need per country-year
@@ -629,17 +670,15 @@ severity = needs.groupBy("location_code", "location_name").agg(
     F.count("*").alias("sector_count")
 )
 
-# Merge with funding flows
-# flows contains: country ISO3, totalFunding, year
+# Merge with funding data (from HDX HAPI /coordination-context/funding)
+# funding contains: location_code, funding_usd, requirements_usd, funding_pct
 country_mismatch = severity.join(
-    flows,
-    severity["location_code"] == flows["countryISO3"],
+    funding,
+    severity["location_code"] == funding["location_code"],
     "left"
 )
 
-# Compute mismatch score:
-# mismatch = 1 - (funding_received / funding_required)
-# Normalized severity rank vs funding rank
+# Compute mismatch score using funding_usd and requirements_usd
 country_mismatch = country_mismatch.withColumn(
     "funding_per_capita",
     F.col("funding_usd") / F.col("people_in_need")
@@ -659,25 +698,29 @@ country_mismatch = country_mismatch.withColumn(
     (F.col("severity_rank") - F.col("funding_rank")) / F.lit(100)
 )
 
-country_mismatch.write.format("delta").mode("overwrite").saveAsTable("crisis.country_mismatch")
+country_mismatch.write.format("delta").mode("overwrite").saveAsTable("workspace.default.country_mismatch")
 ```
 
 ### 4.4 Notebook 3 — Project-Level Anomaly Detection
 
-Flag projects with unusually high or low beneficiary-to-budget ratios using Isolation Forest.
+Flag projects with unusual budget patterns using Isolation Forest. Uses budget-based features only, as the HPC API returns `null` for `targetBeneficiaries` across all projects, making cost-per-person analysis infeasible.
+
+**Features used for anomaly detection:**
+- `budget` — current requested funds
+- `budget_zscore` — how far the project's budget deviates from its cluster average
+- `budget_revision_ratio` — ratio of current to original requested funds
 
 ```python
 # Notebook: 03_project_anomalies
 
 import pandas as pd
+import numpy as np
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
-
-# Fetch project data from HPC API for a set of plans
 import requests
 
 HPC_BASE = "https://api.hpc.tools/v1/public"
-plan_ids = spark.table("crisis.plans").select("id").collect()
+plan_ids = spark.table("workspace.default.plans").select("id").collect()
 
 all_projects = []
 for row in plan_ids:
@@ -685,23 +728,39 @@ for row in plan_ids:
     if resp.ok:
         projects = resp.json().get("data", [])
         for p in projects:
+            budget = p.get("currentRequestedFunds", 0)
+            original = p.get("originalRequirements", budget)
             all_projects.append({
                 "projectCode": p.get("code"),
                 "planId": row.id,
-                "budget": p.get("currentRequestedFunds", 0),
-                "beneficiaries": p.get("targetBeneficiaries", 0),
+                "budget": float(budget) if budget else 0,
+                "original_budget": float(original) if original else 0,
                 "cluster": p.get("globalClusters", [{}])[0].get("name", "Unknown"),
                 "countryISO3": p.get("locations", [{}])[0].get("iso3", ""),
             })
 
 projects_pdf = pd.DataFrame(all_projects)
-projects_pdf = projects_pdf[
-    (projects_pdf["budget"] > 0) & (projects_pdf["beneficiaries"] > 0)
-]
-projects_pdf["cost_per_person"] = projects_pdf["budget"] / projects_pdf["beneficiaries"]
+projects_pdf["budget"] = pd.to_numeric(projects_pdf["budget"], errors="coerce").fillna(0)
+projects_pdf["original_budget"] = pd.to_numeric(projects_pdf["original_budget"], errors="coerce").fillna(0)
+projects_pdf = projects_pdf[projects_pdf["budget"] > 0]
 
-# Isolation Forest for anomaly detection
-features = projects_pdf[["budget", "beneficiaries", "cost_per_person"]].values
+# Compute budget z-score per cluster
+cluster_stats = projects_pdf.groupby("cluster")["budget"].agg(["mean", "std"]).reset_index()
+cluster_stats.columns = ["cluster", "cluster_mean", "cluster_std"]
+projects_pdf = projects_pdf.merge(cluster_stats, on="cluster", how="left")
+projects_pdf["budget_zscore"] = (
+    (projects_pdf["budget"] - projects_pdf["cluster_mean"]) / projects_pdf["cluster_std"].replace(0, 1)
+)
+
+# Budget revision ratio
+projects_pdf["budget_revision_ratio"] = np.where(
+    projects_pdf["original_budget"] > 0,
+    projects_pdf["budget"] / projects_pdf["original_budget"],
+    1.0
+)
+
+# Isolation Forest for anomaly detection (budget-only features)
+features = projects_pdf[["budget", "budget_zscore", "budget_revision_ratio"]].values
 scaler = StandardScaler()
 features_scaled = scaler.fit_transform(features)
 
@@ -710,19 +769,30 @@ projects_pdf["anomaly_label"] = model.fit_predict(features_scaled)
 projects_pdf["anomaly_score"] = -model.decision_function(features_scaled)
 
 # anomaly_label: -1 = anomaly, 1 = normal
-anomalies = projects_pdf[projects_pdf["anomaly_label"] == -1]
-
-anomalies_sdf = spark.createDataFrame(anomalies)
-anomalies_sdf.write.format("delta").mode("overwrite").saveAsTable("crisis.project_anomalies")
+anomalies_sdf = spark.createDataFrame(projects_pdf)
+anomalies_sdf.write.format("delta").mode("overwrite").saveAsTable("workspace.default.project_anomalies")
 ```
 
 ### 4.5 Notebook 4 — Vectorization for RAG
 
 Vectorize country-level crisis summaries for semantic search. Uses Databricks Vector Search (1 free endpoint).
 
+**Prerequisites:**
+1. Install `databricks-vectorsearch` package (not included in default runtime)
+2. Restart Python after installation so imports resolve
+3. Enable Change Data Feed on the source Delta table (required for Delta Sync)
+
 ```python
 # Notebook: 04_vectorize_for_rag
 
+# Cell 1: Install dependencies
+%pip install databricks-vectorsearch
+
+# Cell 2: Restart Python (required after pip install in Databricks)
+dbutils.library.restartPython()
+
+# Cell 3: Create documents and vector index
+import pandas as pd
 from databricks.vector_search.client import VectorSearchClient
 
 vsc = VectorSearchClient()
@@ -731,10 +801,13 @@ vsc = VectorSearchClient()
 vsc.create_endpoint(name="crisis-rag-endpoint")
 
 # Prepare text documents: one per country-year with crisis summary
-mismatch = spark.table("crisis.country_mismatch").toPandas()
+mismatch = spark.table("workspace.default.country_mismatch").toPandas()
 
 documents = []
 for _, row in mismatch.iterrows():
+    funding_usd = float(row.get("funding_usd", 0) or 0)
+    funding_per_capita = float(row.get("funding_per_capita", 0) or 0)
+    coverage = float(row.get("funding_pct", 0) or 0)
     text = (
         f"Country: {row['location_name']} ({row['location_code']}). "
         f"People in need: {row['people_in_need']:,.0f}. "
@@ -751,14 +824,17 @@ for _, row in mismatch.iterrows():
     })
 
 docs_df = spark.createDataFrame(pd.DataFrame(documents))
-docs_df.write.format("delta").mode("overwrite").saveAsTable("crisis.rag_documents")
+
+# Enable Change Data Feed on the table (required for Delta Sync index)
+docs_df.write.format("delta").mode("overwrite").saveAsTable("workspace.default.rag_documents")
+spark.sql("ALTER TABLE workspace.default.rag_documents SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
 
 # Create vector search index on the Delta table
 # Uses Databricks-managed embeddings (no GPU needed, serverless)
 vsc.create_delta_sync_index(
     endpoint_name="crisis-rag-endpoint",
-    index_name="crisis.rag_index",
-    source_table_name="crisis.rag_documents",
+    index_name="workspace.default.rag_index",
+    source_table_name="workspace.default.rag_documents",
     pipeline_type="TRIGGERED",
     primary_key="id",
     embedding_source_column="text",
@@ -779,7 +855,7 @@ DATABRICKS_TOKEN = os.getenv("DATABRICKS_TOKEN")
 async def vector_search(query: str, num_results: int = 5) -> list[dict]:
     async with httpx.AsyncClient() as client:
         resp = await client.post(
-            f"{DATABRICKS_HOST}/api/2.0/vector-search/indexes/crisis.rag_index/query",
+            f"{DATABRICKS_HOST}/api/2.0/vector-search/indexes/workspace.default.rag_index/query",
             headers={"Authorization": f"Bearer {DATABRICKS_TOKEN}"},
             json={
                 "query_text": query,
@@ -793,29 +869,36 @@ async def vector_search(query: str, num_results: int = 5) -> list[dict]:
 
 ### 4.6 Notebook 5 — Benchmarking Comparable Projects
 
-Group projects by cluster, compute percentile bands, and flag outliers.
+Group projects by cluster, compute budget percentile bands, and flag outliers. Benchmarks on budget (not cost-per-person, since beneficiary data is unavailable from the HPC API).
 
 ```python
 # Notebook: 05_benchmarking
 
-projects = spark.table("crisis.project_anomalies")
+projects = spark.table("workspace.default.project_anomalies")
 
-# Per-cluster statistics
+# Per-cluster budget statistics
 from pyspark.sql import functions as F
+from pyspark.sql.window import Window
 
 cluster_stats = projects.groupBy("cluster").agg(
-    F.avg("cost_per_person").alias("avg_cost"),
-    F.stddev("cost_per_person").alias("std_cost"),
-    F.percentile_approx("cost_per_person", 0.25).alias("p25"),
-    F.percentile_approx("cost_per_person", 0.50).alias("median"),
-    F.percentile_approx("cost_per_person", 0.75).alias("p75"),
+    F.avg("budget").alias("avg_budget"),
+    F.stddev("budget").alias("std_budget"),
+    F.percentile_approx("budget", 0.25).alias("p25"),
+    F.percentile_approx("budget", 0.50).alias("median"),
+    F.percentile_approx("budget", 0.75).alias("p75"),
     F.count("*").alias("project_count")
 )
 
-cluster_stats.write.format("delta").mode("overwrite").saveAsTable("crisis.cluster_benchmarks")
+cluster_stats.write.format("delta").mode("overwrite").saveAsTable("workspace.default.cluster_benchmarks")
 
-# Join back to find comparable projects for any given project
-# A "comparable" = same cluster, cost_per_person within ±1 std of cluster mean
+# Join back to compute cluster_budget_zscore per project
+benchmarked = projects.join(cluster_stats, on="cluster", how="left")
+benchmarked = benchmarked.withColumn(
+    "cluster_budget_zscore",
+    (F.col("budget") - F.col("avg_budget")) / F.when(F.col("std_budget") == 0, 1).otherwise(F.col("std_budget"))
+)
+
+benchmarked.write.format("delta").mode("overwrite").saveAsTable("workspace.default.project_benchmarked")
 ```
 
 ### 4.7 Databricks Deliverables Checklist
@@ -825,7 +908,7 @@ cluster_stats.write.format("delta").mode("overwrite").saveAsTable("crisis.cluste
 - [ ] Notebook 03: Project-level anomaly detection (Isolation Forest)
 - [ ] Notebook 04: Vectorize crisis summaries + create Vector Search index
 - [ ] Notebook 05: Cluster benchmarking statistics
-- [ ] Delta tables: `crisis.plans`, `crisis.funding_flows`, `crisis.humanitarian_needs`, `crisis.population`, `crisis.country_mismatch`, `crisis.project_anomalies`, `crisis.rag_documents`, `crisis.cluster_benchmarks`
+- [ ] Delta tables: `workspace.default.plans`, `workspace.default.funding`, `workspace.default.humanitarian_needs`, `workspace.default.population`, `workspace.default.country_mismatch`, `workspace.default.project_anomalies`, `workspace.default.rag_documents`, `workspace.default.cluster_benchmarks`, `workspace.default.project_benchmarked`
 
 ---
 
@@ -851,7 +934,7 @@ Create a Conversational AI agent in the ElevenLabs dashboard:
      answers about severity scores, funding gaps, and notable anomalies.
      Always cite specific numbers when available.
      ```
-   - **Knowledge Base:** Upload the mismatch summary CSV from Databricks (export from `crisis.country_mismatch`)
+   - **Knowledge Base:** Upload the mismatch summary CSV from Databricks (export from `workspace.default.country_mismatch`)
    - **Tools:** Add a custom API tool pointing to your deployed `/api/ask` endpoint
 3. Copy the **Agent ID** for frontend integration
 

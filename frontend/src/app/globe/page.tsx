@@ -1,0 +1,20 @@
+'use client';
+
+import dynamic from 'next/dynamic';
+import { VoiceAgent } from '@/components/VoiceAgent';
+import { GlobeProvider } from '@/context/GlobeContext';
+import { ComparisonPanel } from '@/components/Globe/ComparisonPanel';
+
+const GlobeView = dynamic(() => import('@/components/Globe/GlobeView'), { ssr: false });
+
+export default function GlobeScene() {
+    return (
+        <GlobeProvider>
+            <div className="relative min-h-screen w-full overflow-hidden">
+                <GlobeView />
+                <VoiceAgent />
+                <ComparisonPanel />
+            </div>
+        </GlobeProvider>
+    );
+}
