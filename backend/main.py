@@ -6,7 +6,7 @@ from .services.data_loader import load_all_data
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.data = await load_all_data()
+    await load_all_data()
     yield
 
 app = FastAPI(title="Crisis Topography API", lifespan=lifespan)
@@ -20,5 +20,5 @@ app.add_middleware(
 
 app.include_router(countries.router, prefix="/api")
 app.include_router(mismatch.router, prefix="/api")
-app.include_router(compare.router, prefix="/api")
-app.include_router(ask.router, prefix="/api")
+#app.include_router(compare.router, prefix="/api")
+#app.include_router(ask.router, prefix="/api")
