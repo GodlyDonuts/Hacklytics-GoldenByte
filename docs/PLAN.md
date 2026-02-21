@@ -435,7 +435,7 @@ import httpx
 import base64
 
 HDX_BASE = "https://hapi.humdata.org/api/v2"
-APP_ID = base64.b64encode(b"CrisisTopography:team@hacklytics.org").decode()
+APP_ID = base64.b64encode(b"Haxlytics:team@mail.com").decode()
 
 async def fetch_humanitarian_needs(
     location_code: str | None = None,
@@ -671,7 +671,7 @@ import base64
 
 HPC_BASE = "https://api.hpc.tools/v1/public"
 HDX_BASE = "https://hapi.humdata.org/api/v2"
-APP_ID = base64.b64encode(b"CrisisTopography:team@hacklytics.org").decode()
+APP_ID = base64.b64encode(b"Haxlytics:team@mail.com").decode()
 
 # --- Fetch HRP plans for years 2020-2025 ---
 all_plans = []
