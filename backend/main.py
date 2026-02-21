@@ -1,12 +1,19 @@
+from pathlib import Path
+
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+
+# Load .env from backend/ when running from project root
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
 from .routers import countries, mismatch, compare, ask
 from .services.data_loader import load_all_data
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await load_all_data()
+    app.state.data = await load_all_data()
     yield
 
 app = FastAPI(title="Crisis Topography API", lifespan=lifespan)
