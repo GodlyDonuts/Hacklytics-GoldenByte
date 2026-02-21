@@ -56,9 +56,21 @@ export function VoiceAgent() {
                     targetStats: parameters.targetStats
                 });
                 return "Successfully compared the countries. The user can now see the visualization.";
+            },
+            end_conversation: (parameters: {}) => {
+                console.log("AI called end_conversation:", parameters);
+                // We'll set hasStarted to false to reset UI, and rely on the useEffect below to actually end the session
+                setHasStarted(false);
+                return "Conversation ended.";
             }
         }
     });
+
+    useEffect(() => {
+        if (!hasStarted && conversation.status === "connected") {
+            conversation.endSession();
+        }
+    }, [hasStarted, conversation]);
 
     const startVoiceSession = useCallback(async () => {
         try {
