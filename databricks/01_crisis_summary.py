@@ -49,9 +49,9 @@ YEARS = range(2022, 2027)
 import os
 
 CSV_PATHS = [
-    "/Workspace/Users/{user}/acaps_crises_2022_2026.csv",  # Workspace file
-    "/dbfs/FileStore/acaps_crises_2022_2026.csv",           # DBFS FileStore
-    "/Volumes/workspace/default/data/acaps_crises_2022_2026.csv",  # Unity Catalog Volume
+    "/Volumes/workspace/default/hacks/acaps_crises_2022_2026.csv",  # Unity Catalog Volume
+    "/Workspace/Users/{user}/acaps_crises_2022_2026.csv",           # Workspace file
+    "/dbfs/FileStore/acaps_crises_2022_2026.csv",                   # DBFS FileStore
 ]
 
 acaps_df = None
