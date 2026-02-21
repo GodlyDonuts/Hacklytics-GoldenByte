@@ -58,15 +58,9 @@ async def get_globe_crises(
             "crisis_id": r.get("crisis_id"),
             "crisis_name": r.get("crisis_name"),
             "acaps_severity": _float(r.get("acaps_severity")),
-            "severity_class": r.get("severity_class"),
-            "has_hrp": _bool(r.get("has_hrp")),
-            "appeal_type": r.get("appeal_type"),
-            "funding_state": r.get("funding_state"),
             "people_in_need": _int(r.get("people_in_need")),
-            "funding_gap_usd": _float(r.get("funding_gap_usd")),
-            "funding_coverage_pct": _float(r.get("funding_coverage_pct")),
-            "b2b_ratio": _float(r.get("avg_b2b_ratio")),
-            "crisis_rank": _int(r.get("crisis_rank")),
+            "funding_usd": _float(r.get("funding_usd")),
+            "b2b_ratio": _float(r.get("b2b_ratio"))
         }
         by_country[iso3].append(crisis)
 
