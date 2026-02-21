@@ -9,8 +9,8 @@ from contextlib import asynccontextmanager
 # Load .env from backend/ when running from project root
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
-from .routers import ask, benchmark, genie, globe, report
-from .services.cache import warm_cache
+from routers import ask, benchmark, genie, globe, report
+from services.cache import warm_cache
 
 
 @asynccontextmanager

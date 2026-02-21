@@ -6,7 +6,7 @@
  * can show a "warming up" state instead of a generic error.
  */
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
 export class WarehouseStartingError extends Error {
   constructor(message: string) {
@@ -227,10 +227,10 @@ export async function queryGenie(
 
 export async function getGlobeCrises(
   year: number = 2024,
-  month?: number
+  month?: number | null
 ): Promise<GlobeCrisesResponse> {
   const params = new URLSearchParams({ year: String(year) });
-  if (month !== undefined) params.set("month", String(month));
+  if (month != null) params.set("month", String(month));
   return apiFetch(`/api/globe/crises?${params}`);
 }
 

@@ -22,7 +22,6 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import Globe, { GlobeInstance } from "globe.gl";
 // Child components: camera/controls overlay and filter modal
 import GlobeControls from "./GlobeControls";
-import DataFiltersModal from "./DataFiltersModal";
 // Global state: selected country, fly-to target, comparison arcs, view mode, filters
 import { useGlobeContext } from "@/context/GlobeContext";
 // API: fetches crisis data by year/month; GlobeCountry = shape of each country in the response
@@ -80,7 +79,6 @@ export default function GlobeView() {
 
   // Local state
   const [selectedPoint, setSelectedPoint] = useState<GlobeCountry | null>(null); // Country used for the floating HTML label
-  const [filtersOpen, setFiltersOpen] = useState(false);                           // Whether DataFiltersModal is open
   const [data, setData] = useState<GlobeCountry[]>([]);                            // Raw API response: list of countries with crises
 
   // From GlobeContext (see context/GlobeContext.tsx): drives fly-to, arcs, view mode, and filters
@@ -308,11 +306,6 @@ export default function GlobeView() {
       )}
       {/* Camera controls (e.g. reset view) that need access to the globe instance */}
       <GlobeControls globeRef={globeRef} />
-      {/* Modal for year/month filters; filters are stored in GlobeContext and drive the data fetch above */}
-      <DataFiltersModal
-        open={filtersOpen}
-        onToggle={() => setFiltersOpen((o) => !o)}
-      />
     </div>
   );
 }

@@ -14,7 +14,7 @@ export interface GlobeState {
   selectedCountry: string | null;
   filters: {
     year: number;
-    month: number;
+    month: number | null;
     country: string | null;
     crisis: string | null;
     funds: string | null;
@@ -46,8 +46,8 @@ type GlobeContextValue = GlobeState & {
 const defaultState: GlobeState = {
   selectedCountry: null,
   filters: {
-    year: Math.min(2026, Math.max(2022, new Date().getFullYear())),
-    month: new Date().getMonth() + 1,
+    year: 2024,
+    month: null,
     country: null,
     crisis: null,
     funds: null,

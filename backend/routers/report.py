@@ -6,6 +6,8 @@ from fastapi.responses import FileResponse
 from google import genai
 from markdown_pdf import MarkdownPdf, Section
 
+from services.cache import get_crises
+
 router = APIRouter()
 
 @router.get("/report")
@@ -19,22 +21,24 @@ async def generate_report(request: Request, scope: str = Query("global"), iso3: 
     if not gemini_key:
         raise HTTPException(status_code=500, detail="GEMINI_KEY not configured")
 
-    # Access cached Databricks data via the startup lifespan state
-    data = getattr(request.app.state, "data", {})
-    if not data:
-        raise HTTPException(status_code=500, detail="Data not available in app state")
-
-    funding_data = data.get("funding", [])
+    # Access cached Databricks data via the cache service instead of app.state
+    funding_data = get_crises(year=2024)
+    if not funding_data:
+        raise HTTPException(status_code=500, detail="Data not available in cache")
     
     prompt = ""
     # Structure the prompt based on the scope
     if scope == "country" and iso3:
         # Find country specific info to feed to the LLM
-        country_info = [f for f in funding_data if f.get("location_code") == iso3]
+        country_info = [f for f in funding_data if (f.get("iso3") or f.get("location_code")) == iso3]
         
-        country_name = country_info[0].get("location_name") if country_info else iso3
+        country_name = iso3
+        if country_info:
+            country_name = country_info[0].get("country_name") or country_info[0].get("location_name") or iso3
+        
         funding_usd = sum(float(f.get("funding_usd") or 0) for f in country_info)
-        req_usd = sum(float(f.get("requirements_usd") or 0) for f in country_info)
+        gap_usd = sum(float(f.get("funding_gap_usd") or sum([float(f.get("requirements_usd") or 0) for f in country_info]) - funding_usd) for f in country_info)
+        req_usd = funding_usd + gap_usd
         pct = (funding_usd / req_usd * 100) if req_usd > 0 else 0
         
         prompt = f"""
@@ -62,20 +66,24 @@ Tone: urgent, data-driven.
         # Let's just find the top 5 most underfunded countries to give context to Gemini
         grouped = {}
         for f in funding_data:
-            iso = f.get("location_code")
-            name = f.get("location_name")
+            iso = f.get("iso3") or f.get("location_code")
+            name = f.get("country_name") or f.get("location_name")
             if not iso or not name: continue
             if iso not in grouped:
-                grouped[iso] = {"name": name, "req": 0, "fund": 0}
-            grouped[iso]["req"] += float(f.get("requirements_usd") or 0)
-            grouped[iso]["fund"] += float(f.get("funding_usd") or 0)
+                grouped[iso] = {"name": name, "req": 0, "fund": 0, "gap": 0}
+            
+            fund = float(f.get("funding_usd") or 0)
+            gap = float(f.get("funding_gap_usd") or (float(f.get("requirements_usd") or 0) - fund))
+            
+            grouped[iso]["fund"] += fund
+            grouped[iso]["gap"] += gap
+            grouped[iso]["req"] += fund + gap
         
         # Calculate gaps
         gaps = []
         for iso, stats in grouped.items():
-            gap = stats["req"] - stats["fund"]
-            if gap > 0:
-                gaps.append({"name": stats["name"], "gap": gap})
+            if stats["gap"] > 0:
+                gaps.append({"name": stats["name"], "gap": stats["gap"]})
         
         top_gaps = sorted(gaps, key=lambda x: x["gap"], reverse=True)[:5]
         top_gaps_str = "\n".join([f"- {g['name']}: ${g['gap']:,.2f} shortfall" for g in top_gaps])
