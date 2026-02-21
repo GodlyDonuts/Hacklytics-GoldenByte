@@ -109,11 +109,12 @@ for i, plan in enumerate(plan_rows):
         if resp.ok:
             for p in resp.json().get("data", []):
                 code = p.get("code", "") or ""
-                # Extract ISO3 from project code: codes are like SDN-24/H/001
-                iso3_from_code = code[:3].upper() if len(code) >= 3 and code[:3].isalpha() else ""
-                # Some codes start with a letter prefix before ISO3
-                if not iso3_from_code and len(code) >= 4:
-                    iso3_from_code = code[1:4].upper() if code[1:4].isalpha() else ""
+                # Extract ISO3 from project code: codes are like HSDN24-CSS-209320-1
+                # Always prefixed with a single letter (H=humanitarian, F=flash, etc.)
+                # so ISO3 is at positions 1:4
+                iso3_from_code = ""
+                if len(code) >= 4 and code[1:4].isalpha():
+                    iso3_from_code = code[1:4].upper()
 
                 iso3 = iso3_from_code or plan["iso3"]
 
