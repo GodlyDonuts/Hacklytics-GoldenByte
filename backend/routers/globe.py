@@ -1,13 +1,14 @@
-"""Globe API — volcano data and B2B drill-down.
+"""Globe API -- volcano data and B2B drill-down.
 
 Serves crisis_summary for globe volcanoes and project_embeddings for B2B breakdown.
+All data is served from the in-memory cache (loaded once at startup).
 """
 
 from collections import defaultdict
 
 from fastapi import APIRouter, HTTPException, Query
 
-from ..services.databricks_client import execute_sql
+from ..services.cache import get_crises, get_projects
 
 router = APIRouter()
 
@@ -17,7 +18,7 @@ VALID_MONTHS = range(1, 13)
 
 def _validate_year(year: int) -> int:
     if year not in VALID_YEARS:
-        raise HTTPException(400, f"year must be 2022–2026, got {year}")
+        raise HTTPException(400, f"year must be 2022-2026, got {year}")
     return year
 
 
@@ -25,7 +26,7 @@ def _validate_month(month: int | None) -> int | None:
     if month is None:
         return None
     if month not in VALID_MONTHS:
-        raise HTTPException(400, f"month must be 1–12, got {month}")
+        raise HTTPException(400, f"month must be 1-12, got {month}")
     return month
 
 
@@ -39,24 +40,13 @@ def _validate_iso3(iso3: str) -> str:
 @router.get("/crises")
 async def get_globe_crises(
     year: int = Query(2024, ge=2022, le=2026),
-    month: int | None = Query(None, ge=1, le=12, description="Filter to specific month (1–12); omit for full year"),
+    month: int | None = Query(None, ge=1, le=12, description="Filter to specific month (1-12); omit for full year"),
 ):
-    """Volcano data for the globe. Queries crisis_summary on demand. Month-based for simpler view."""
+    """Volcano data for the globe. Served from in-memory cache."""
     year = _validate_year(year)
     month = _validate_month(month)
 
-    if month is not None:
-        where_clause = f"WHERE year = {year} AND month = {month}"
-    else:
-        where_clause = f"WHERE year = {year}"
-
-    try:
-        print(f"DESCRIBE workspace.default.crisis_summary: {await execute_sql('DESCRIBE workspace.default.crisis_summary')}")
-        rows = await execute_sql(
-            f"SELECT * FROM workspace.default.crisis_summary {where_clause} ORDER BY iso3, crisis_rank"
-        )
-    except RuntimeError as e:
-        raise HTTPException(502, f"Databricks error: {e}") from e
+    rows = get_crises(year, month)
 
     # Group by country (iso3)
     by_country: dict[str, list] = defaultdict(list)
@@ -95,6 +85,59 @@ async def get_globe_crises(
         "month": month,
         "year_month": year_month,
         "countries": countries,
+    }
+
+
+@router.get("/b2b")
+async def get_globe_b2b(
+    iso3: str = Query(..., description="ISO3 country code"),
+    year: int = Query(2024, ge=2022, le=2026),
+):
+    """Project-level B2B breakdown when user clicks a volcano. Served from in-memory cache."""
+    iso3 = _validate_iso3(iso3)
+    year = _validate_year(year)
+
+    rows = get_projects(iso3, year)
+
+    projects = []
+    for r in rows:
+        projects.append({
+            "project_code": r.get("project_code"),
+            "project_name": r.get("project_name"),
+            "cluster": r.get("cluster"),
+            "requested_funds": _float(r.get("requested_funds")),
+            "target_beneficiaries": _int(r.get("target_beneficiaries")),
+            "b2b_ratio": _float(r.get("b2b_ratio")),
+            "cost_per_beneficiary": _float(r.get("cost_per_beneficiary")),
+            "b2b_percentile": _float(r.get("b2b_percentile")),
+            "is_outlier": _bool(r.get("is_outlier")),
+            "cluster_median_b2b": _float(r.get("cluster_median_b2b")),
+        })
+
+    # Weighted B2B: sum(beneficiaries) / sum(funding) -- weights by project size
+    total_beneficiaries = sum(
+        p["target_beneficiaries"] for p in projects
+        if p["target_beneficiaries"] is not None and p["requested_funds"] is not None
+        and p["requested_funds"] > 0
+    )
+    total_funding = sum(
+        p["requested_funds"] for p in projects
+        if p["target_beneficiaries"] is not None and p["requested_funds"] is not None
+        and p["requested_funds"] > 0
+    )
+    b2b_ratios = [p["b2b_ratio"] for p in projects if p["b2b_ratio"] is not None]
+    summary = {
+        "weighted_b2b": total_beneficiaries / total_funding if total_funding > 0 else None,
+        "median_b2b": _median(b2b_ratios) if b2b_ratios else None,
+        "total_projects": len(projects),
+        "outlier_count": sum(1 for p in projects if p.get("is_outlier")),
+    }
+
+    return {
+        "iso3": iso3,
+        "year": year,
+        "projects": projects,
+        "summary": summary,
     }
 
 

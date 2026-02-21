@@ -3,13 +3,14 @@
 import { useConversation } from "@elevenlabs/react";
 import { useCallback, useState, useEffect } from "react";
 import { useGlobeContext } from "@/context/GlobeContext";
+import { queryGenie } from "@/lib/api";
 
 const AGENT_ID = process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID || "agent_1201khzd23t9fsaramppkhnftan0";
 
 export function VoiceAgent() {
     const [isSpacePressed, setIsSpacePressed] = useState(false);
     const [hasStarted, setHasStarted] = useState(false);
-    const { setFlyToCoordinates, setComparisonData, setViewMode } = useGlobeContext();
+    const { setFlyToCoordinates, setComparisonData, setViewMode, setGenieChartData } = useGlobeContext();
 
     // We pass micMuted dynamic state directly to the hook
     const conversation = useConversation({
@@ -61,6 +62,21 @@ export function VoiceAgent() {
                     targetStats: parameters.targetStats
                 });
                 return "Successfully compared the countries. The user can now see the visualization.";
+            },
+            query_data: (parameters: { question: string }) => {
+                console.log("AI called query_data:", parameters);
+                queryGenie(parameters.question)
+                    .then((result) => {
+                        setGenieChartData({
+                            question: result.question,
+                            columns: result.columns,
+                            rows: result.rows,
+                            description: result.description,
+                            sql: result.sql,
+                        });
+                    })
+                    .catch((err) => console.error("Genie query failed:", err));
+                return "Querying the database now. Results will appear on screen shortly.";
             },
             end_conversation: (parameters: {}) => {
                 console.log("AI called end_conversation:", parameters);

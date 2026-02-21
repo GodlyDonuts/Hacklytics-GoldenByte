@@ -92,6 +92,36 @@ export interface HealthResponse {
   };
 }
 
+export interface Crisis {
+  crisis_id: string;
+  crisis_name: string;
+  acaps_severity: number;
+  severity_class: string;
+  has_hrp: boolean;
+  appeal_type: string;
+  funding_state: string;
+  people_in_need: number;
+  funding_gap_usd: number;
+  funding_coverage_pct: number;
+  b2b_ratio: number;
+  crisis_rank: number;
+}
+
+export interface GlobeCountry {
+  iso3: string;
+  country_name: string;
+  lat: number;
+  lng: number;
+  crises: Crisis[];
+}
+
+export interface GlobeCrisesResponse {
+  year: number;
+  month: number | null;
+  year_month: string;
+  countries: GlobeCountry[];
+}
+
 // -- API Functions --
 
 export async function getHealth(): Promise<HealthResponse> {
@@ -145,4 +175,73 @@ export async function askQuestion(
     method: "POST",
     body: JSON.stringify({ question }),
   });
+}
+
+// -- Genie (Natural Language to SQL) --
+
+export interface GenieColumn {
+  name: string;
+  type: string;
+}
+
+export interface GenieResponse {
+  question: string;
+  sql: string | null;
+  columns: GenieColumn[];
+  rows: (string | number | null)[][];
+  description: string | null;
+  conversation_id: string | null;
+  message_id: string | null;
+}
+
+export async function queryGenie(
+  question: string
+): Promise<GenieResponse> {
+  return apiFetch("/api/genie", {
+    method: "POST",
+    body: JSON.stringify({ question }),
+  });
+}
+
+// -- Globe endpoint functions --
+
+export async function getGlobeCrises(
+  year: number = 2024,
+  month?: number
+): Promise<GlobeCrisesResponse> {
+  const params = new URLSearchParams({ year: String(year) });
+  if (month !== undefined) params.set("month", String(month));
+  return apiFetch(`/api/globe/crises?${params}`);
+}
+
+export interface B2BProject {
+  project_code: string | null;
+  project_name: string | null;
+  cluster: string | null;
+  requested_funds: number | null;
+  target_beneficiaries: number | null;
+  b2b_ratio: number | null;
+  cost_per_beneficiary: number | null;
+  b2b_percentile: number | null;
+  is_outlier: boolean;
+  cluster_median_b2b: number | null;
+}
+
+export interface GlobeB2BResponse {
+  iso3: string;
+  year: number;
+  projects: B2BProject[];
+  summary: {
+    weighted_b2b: number | null;
+    median_b2b: number | null;
+    total_projects: number;
+    outlier_count: number;
+  };
+}
+
+export async function getGlobeB2B(
+  iso3: string,
+  year: number = 2024
+): Promise<GlobeB2BResponse> {
+  return apiFetch(`/api/globe/b2b?iso3=${iso3}&year=${year}`);
 }

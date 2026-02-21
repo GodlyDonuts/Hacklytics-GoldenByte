@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 # Load .env from backend/ when running from project root
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
-from .routers import ask, benchmark, globe
+from .routers import ask, benchmark, genie, globe
 
 
 
@@ -24,3 +24,4 @@ app.add_middleware(
 app.include_router(globe.router, prefix="/api/globe")
 app.include_router(benchmark.router, prefix="/api")
 app.include_router(ask.router, prefix="/api")
+app.include_router(genie.router, prefix="/api")

@@ -4,6 +4,8 @@ import dynamic from 'next/dynamic';
 import { VoiceAgent } from '@/components/VoiceAgent';
 import { GlobeProvider } from '@/context/GlobeContext';
 import { ComparisonPanel } from '@/components/Globe/ComparisonPanel';
+import { GenieChartPanel } from '@/components/Globe/GenieChartPanel';
+import { CountryDetailOverlay } from '@/components/Sidebar/CountryDetailOverlay';
 
 const GlobeView = dynamic(() => import('@/components/Globe/GlobeView'), { ssr: false });
 
@@ -13,7 +15,9 @@ export default function GlobeScene() {
             <div className="relative min-h-screen w-full overflow-hidden">
                 <GlobeView />
                 <VoiceAgent />
+                <GenieChartPanel />
                 <ComparisonPanel />
+                <CountryDetailOverlay />
             </div>
         </GlobeProvider>
     );
