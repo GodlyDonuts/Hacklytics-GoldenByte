@@ -467,7 +467,7 @@ output_df = valid[[c for c in output_columns if c in valid.columns]]
 
 # Write to Delta
 embeddings_sdf = spark.createDataFrame(output_df)
-embeddings_sdf.write.format("delta").mode("overwrite").saveAsTable(VS_SOURCE_TABLE)
+embeddings_sdf.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(VS_SOURCE_TABLE)
 
 row_count = embeddings_sdf.count()
 print(f"Wrote {row_count} rows to {VS_SOURCE_TABLE}")

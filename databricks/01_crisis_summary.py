@@ -715,7 +715,7 @@ output_df = result[available]
 
 # Convert to Spark DataFrame and write
 crisis_sdf = spark.createDataFrame(output_df)
-crisis_sdf.write.format("delta").mode("overwrite").saveAsTable("workspace.default.crisis_summary")
+crisis_sdf.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable("workspace.default.crisis_summary")
 
 row_count = crisis_sdf.count()
 print(f"Wrote {row_count} rows to workspace.default.crisis_summary")
