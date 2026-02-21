@@ -55,8 +55,13 @@ CSV_PATHS = [
 ]
 
 acaps_df = None
+try:
+    _nb_user = spark.conf.get("spark.databricks.notebook.userName")
+except Exception:
+    _nb_user = dbutils.notebook.entry_point.getDbutils().notebook().getContext().userName().get()
+
 for path in CSV_PATHS:
-    resolved = path.format(user=spark.conf.get("spark.databricks.notebook.userName", ""))
+    resolved = path.format(user=_nb_user)
     try:
         if resolved.startswith("/dbfs/") or resolved.startswith("/Volumes/"):
             acaps_df = pd.read_csv(resolved)
