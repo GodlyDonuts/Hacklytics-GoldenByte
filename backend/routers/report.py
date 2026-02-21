@@ -3,7 +3,8 @@ import tempfile
 import asyncio
 from fastapi import APIRouter, Request, Query, HTTPException
 from fastapi.responses import FileResponse
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from markdown_pdf import MarkdownPdf, Section
 
 router = APIRouter()
@@ -98,12 +99,17 @@ The report MUST be long enough to cover exactly 2 full pages when rendered to a 
 Ensure the tone is urgent, analytical, and data-driven.
 """
 
-    # Call Gemini (run it in a threadpool since google.generativeai is sync)
-    genai.configure(api_key=gemini_key)
-    model = genai.GenerativeModel('gemini-2.0-flash')
+    # Call Gemini (run it in a threadpool since google.genai is sync)
+    client = genai.Client(api_key=gemini_key)
     
     def fetch_llm():
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model='gemini-3-flash-preview',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                thinking_config=types.ThinkingConfig(thinking_level="high")
+            ),
+        )
         return response.text
 
     markdown_content = await asyncio.to_thread(fetch_llm)
