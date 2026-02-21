@@ -1,1288 +1,1359 @@
-# Haxlytics — 36-Hour Datathon Implementation Plan
+# Crisis Topography Command Center — Implementation Plan
 
-## Project: Humanitarian Funding Mismatch Globe
-
-> Are the world's worst humanitarian crises receiving proportional funding?
-
-A 3D interactive globe that visualizes the gap between humanitarian crisis severity and actual pooled fund coverage, powered by ML-driven mismatch detection and an ElevenLabs voice agent that explains funding inequalities in natural language.
+> **Datathon Timeline:** 36 hours
+> **Challenge:** Inequality in Humanitarian Funding Allocation
+> **Deliverable:** Interactive 3D globe mapping humanitarian funding mismatches, powered by ML-driven mismatch detection and voice-navigable UX.
 
 ---
 
-## Architecture Overview
+## Table of Contents
+
+1. [Architecture Overview](#1-architecture-overview)
+2. [Workstream A — Frontend: Globe & UI](#2-workstream-a--frontend-globe--ui)
+3. [Workstream B — Backend: FastAPI & Data Integration](#3-workstream-b--backend-fastapi--data-integration)
+4. [Workstream C — Databricks: Pipeline & ML](#4-workstream-c--databricks-pipeline--ml)
+5. [Workstream D — AI Integration: ElevenLabs Voice Agent](#5-workstream-d--ai-integration-elevenlabs-voice-agent)
+6. [Data Flow Diagram](#6-data-flow-diagram)
+7. [API Reference Cheat Sheet](#7-api-reference-cheat-sheet)
+8. [Databricks Free Edition Constraints](#8-databricks-free-edition-constraints)
+9. [36-Hour Sprint Schedule](#9-36-hour-sprint-schedule)
+
+---
+
+## 1. Architecture Overview
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                        FRONTEND (Next.js)                        │
-│  ┌────────────────┐  ┌──────────────┐  ┌──────────────────────┐ │
-│  │  globe.gl       │  │  Filter UI   │  │  ElevenLabs Voice    │ │
-│  │  (Three.js)     │  │  (Sidebar)   │  │  Agent Widget        │ │
-│  └───────┬────────┘  └──────┬───────┘  └──────────┬───────────┘ │
-│          │                  │                     │              │
-└──────────┼──────────────────┼─────────────────────┼──────────────┘
-           │                  │                     │
-           ▼                  ▼                     ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                      BACKEND (FastAPI)                            │
-│  ┌─────────────┐  ┌────────────────┐  ┌───────────────────────┐ │
-│  │ /globe-data  │  │ /mismatches    │  │ /voice-context        │ │
-│  │ /countries   │  │ /benchmarks    │  │ (ElevenLabs webhook)  │ │
-│  └──────┬──────┘  └───────┬────────┘  └───────────┬───────────┘ │
-│         │                 │                       │              │
-└─────────┼─────────────────┼───────────────────────┼──────────────┘
-          │                 │                       │
-          ▼                 ▼                       ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                    DATA LAYER                                    │
-│  ┌──────────────┐  ┌──────────────────┐  ┌───────────────────┐  │
-│  │  PostgreSQL   │  │   Databricks     │  │   External APIs   │  │
-│  │  (Vultr VM)   │  │   (ML + ETL)     │  │   (HPC/HDX/CBPF) │  │
-│  └──────────────┘  └──────────────────┘  └───────────────────┘  │
-└──────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                        FRONTEND                             │
+│  Next.js 14 App Router + react-globe.gl (Three.js)          │
+│  ElevenLabs React SDK (@elevenlabs/react)                   │
+│  Choropleth layers · Heatmaps · Point markers               │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ REST (JSON)
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│                     BACKEND (FastAPI)                        │
+│  /api/countries · /api/mismatch · /api/compare              │
+│  /api/projects · /api/ask                                   │
+│  Pulls from HPC API + HDX HAPI at startup & caches          │
+└──────────┬─────────────────────────────────┬────────────────┘
+           │                                 │
+           ▼                                 ▼
+┌────────────────────┐          ┌─────────────────────────────┐
+│   HPC Tools API    │          │       Databricks (Free)     │
+│   HDX HAPI API     │          │  Delta Tables · ML Model    │
+│   (Live data)      │          │  Vector Search · Notebooks  │
+└────────────────────┘          └─────────────────────────────┘
 ```
 
----
+**Tech Stack Summary**
 
-## Infrastructure (Vultr — $1,000 Credits)
-
-| Resource | Spec | Purpose | Est. Cost/hr |
-|---|---|---|---|
-| **GPU Instance** | 1x A100 (80GB VRAM) | Databricks runtime, ML training | ~$2.50/hr |
-| **App Server** | 4 vCPU / 16GB RAM | FastAPI + PostgreSQL | ~$0.12/hr |
-| **Frontend** | Vercel Free Tier or same VM | Next.js deployment | $0 |
-
-Provision the GPU instance first for Databricks. Run FastAPI and Postgres on the app server. Deploy Next.js to Vercel (free tier) pointed at the FastAPI server.
-
----
-
-# WORKSTREAM 1: Backend — FastAPI + Data Integration
-
-**Owner:** Backend Engineer(s)
-**Priority:** Start immediately — frontend and AI both depend on this.
+| Layer | Technology |
+|---|---|
+| Frontend | Next.js 14, react-globe.gl, Tailwind CSS, @elevenlabs/react |
+| Backend | Python 3.11+, FastAPI, httpx, pandas |
+| Data Platform | Databricks Free Edition (serverless, Python notebooks) |
+| ML | scikit-learn (Isolation Forest / Z-score), Databricks ML Runtime |
+| Vector Store | Databricks Vector Search (1 endpoint, Free Edition) |
+| Voice AI | ElevenLabs Conversational AI (React SDK + agent) |
+| External APIs | HPC Tools v1, HDX HAPI v2 |
 
 ---
 
-## 1.1 Project Scaffold
+## 2. Workstream A — Frontend: Globe & UI
+
+**Owner:** Frontend developer(s)
+**Depends on:** Workstream B endpoints being available (can mock initially)
+
+### 2.1 Project Setup
 
 ```bash
-mkdir backend && cd backend
-python -m venv venv && source venv/bin/activate
-pip install fastapi uvicorn httpx pandas sqlalchemy psycopg2-binary python-dotenv pydantic
+npx create-next-app@latest frontend --app --typescript --tailwind --eslint
+cd frontend
+npm install react-globe.gl @elevenlabs/react d3-scale d3-scale-chromatic
 ```
 
-**File structure:**
+The `react-globe.gl` library wraps Three.js and must be dynamically imported (no SSR):
 
-```
-backend/
-├── main.py
-├── .env
-├── requirements.txt
-├── app/
-│   ├── __init__.py
-│   ├── config.py
-│   ├── models.py          # SQLAlchemy ORM
-│   ├── schemas.py          # Pydantic response models
-│   ├── database.py         # DB session
-│   ├── routers/
-│   │   ├── globe.py        # Globe data endpoints
-│   │   ├── mismatches.py   # Mismatch detection endpoints
-│   │   └── voice.py        # ElevenLabs context endpoint
-│   └── services/
-│       ├── hpc_client.py   # HPC Tools API client
-│       ├── hdx_client.py   # HDX HAPI client
-│       ├── cbpf_client.py  # CBPF API client
-│       ├── ingestion.py    # Data pipeline orchestrator
-│       └── databricks.py   # Databricks query client
+```tsx
+// frontend/src/components/Globe.tsx
+'use client';
+
+import dynamic from 'next/dynamic';
+import { useRef, useEffect, useState, useCallback } from 'react';
+
+const GlobeGL = dynamic(() => import('react-globe.gl'), { ssr: false });
 ```
 
-## 1.2 External API Clients — Exact Endpoints
+### 2.2 Globe Component — Core Layers
 
-### HPC Tools API (FTS v1)
+The globe renders three visualization layers simultaneously. Each layer maps to a different data shape returned by the backend.
 
-Base URL: `https://api.hpc.tools/v1`
+**Layer 1 — Choropleth Polygons (Severity)**
 
-| Endpoint | Method | Purpose | Key Params |
-|---|---|---|---|
-| `/public/plan/year/{year}` | GET | All HRPs for a year | `year`: 1999–2026 |
-| `/public/plan/country/{iso3}` | GET | Plans by country | `iso3`: 3-letter ISO |
-| `/public/plan/id/{id}` | GET | Single plan detail | `id`: plan integer ID |
-| `/public/project/plan/{planID}` | GET | Projects within a plan | `planID`: integer |
-| `/public/fts/flow` | GET | Funding flows | See boundary/filter params below |
-| `/public/emergency/country/{iso3}` | GET | Emergencies by country | `iso3` |
-| `/public/global-cluster` | GET | All cluster definitions | — |
-| `/public/location` | GET | All locations | — |
+Color each country polygon by its HNO severity score. Uses `polygonsData` from globe.gl fed with GeoJSON features enriched with severity data.
 
-**Funding flow query for a country-year:**
-
-```
-GET /v1/public/fts/flow?countryISO3=SDN&year=2025&groupby=GlobalCluster
-```
-
-Returns incoming/outgoing/internal flows grouped by cluster with totals.
-
-**All plans for 2026:**
-
-```
-GET /v1/public/plan/year/2026
+```tsx
+<GlobeGL
+  ref={globeRef}
+  globeImageUrl="//cdn.jsdelivr.net/npm/three-globe/example/img/earth-night.jpg"
+  backgroundImageUrl="//cdn.jsdelivr.net/npm/three-globe/example/img/night-sky.png"
+  polygonsData={countriesGeo}
+  polygonCapColor={(feat) => severityColorScale(feat.properties.severity)}
+  polygonSideColor={() => 'rgba(0, 100, 0, 0.15)'}
+  polygonStrokeColor={() => '#111'}
+  polygonAltitude={(feat) => feat === hoveredCountry ? 0.12 : 0.06}
+  polygonLabel={(feat) => `
+    <b>${feat.properties.ADMIN}</b><br/>
+    Severity: ${feat.properties.severity}<br/>
+    People in Need: ${feat.properties.peopleInNeed?.toLocaleString()}<br/>
+    Funding Coverage: ${(feat.properties.fundingCoverage * 100).toFixed(1)}%
+  `}
+  onPolygonClick={handleCountryClick}
+  onPolygonHover={setHoveredCountry}
+/>
 ```
 
-Returns array of plan objects with `id`, `planVersion.name`, `locations`, `categories`, `years`.
+Color scale uses d3:
 
-**Projects in a plan:**
+```tsx
+import { scaleSequentialSqrt } from 'd3-scale';
+import { interpolateYlOrRd } from 'd3-scale-chromatic';
 
-```
-GET /v1/public/project/plan/1514
-```
-
-Returns project-level data: `code`, `name`, `projectVersion.objective`, `organizations`, `locations`, `globalClusters`, `governingEntities`.
-
-**Implementation — `hpc_client.py`:**
-
-```python
-import httpx
-from app.config import settings
-
-BASE = "https://api.hpc.tools/v1/public"
-
-async def fetch_plans_by_year(year: int) -> list[dict]:
-    async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.get(f"{BASE}/plan/year/{year}")
-        r.raise_for_status()
-        return r.json()["data"]
-
-async def fetch_funding_flows(iso3: str, year: int, groupby: str = "GlobalCluster") -> dict:
-    async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.get(f"{BASE}/fts/flow", params={
-            "countryISO3": iso3,
-            "year": year,
-            "groupby": groupby,
-        })
-        r.raise_for_status()
-        return r.json()["data"]
-
-async def fetch_projects_for_plan(plan_id: int) -> list[dict]:
-    async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.get(f"{BASE}/project/plan/{plan_id}")
-        r.raise_for_status()
-        return r.json()["data"]
+const severityColorScale = scaleSequentialSqrt(interpolateYlOrRd).domain([0, 5]);
 ```
 
----
+**Layer 2 — Heatmap (Funding Gap Intensity)**
 
-### HDX HAPI (v2)
+Overlay a heatmap layer showing funding gap magnitude. Uses `heatmapsData` with `[lat, lng, weight]`.
 
-Base URL: `https://hapi.humdata.org/api/v2`
-
-**Authentication:** Every request requires an `app_identifier` query param (base64-encoded `appname:email`).
-
-Generate it once:
-
-```
-GET /api/v2/encode_app_identifier?application=haxlytics&email=team@haxlytics.dev
-```
-
-| Endpoint | Purpose | Key Params |
-|---|---|---|
-| `/affected-people/humanitarian-needs` | People in need by country/admin/sector | `location_code`, `admin1_code`, `sector_code` |
-| `/affected-people/idps` | Internally displaced persons | `location_code` |
-| `/affected-people/refugees-persons-of-concern` | Refugee counts | `location_code` |
-| `/coordination-context/funding` | Funding by country | `location_code` |
-| `/coordination-context/conflict-events` | Conflict event counts | `location_code` |
-| `/coordination-context/national-risk` | Risk scores | `location_code` |
-| `/food-security-nutrition-poverty/food-security` | IPC phase data | `location_code`, `ipc_phase`, `ipc_type` |
-| `/geography-infrastructure/baseline-population` | Population data | `location_code`, `admin1_code` |
-| `/metadata/location` | Country list with ISO codes | `has_hrp=true` |
-
-All endpoints support `limit`, `offset`, `output_format` (JSON/csv).
-
-**Implementation — `hdx_client.py`:**
-
-```python
-import httpx
-from base64 import b64encode
-from app.config import settings
-
-BASE = "https://hapi.humdata.org/api/v2"
-
-def _app_id() -> str:
-    raw = f"{settings.HDX_APP_NAME}:{settings.HDX_EMAIL}"
-    return b64encode(raw.encode()).decode()
-
-async def fetch_humanitarian_needs(iso3: str) -> list[dict]:
-    async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.get(f"{BASE}/affected-people/humanitarian-needs", params={
-            "location_code": iso3,
-            "app_identifier": _app_id(),
-            "limit": 10000,
-            "output_format": "json",
-        })
-        r.raise_for_status()
-        return r.json()["data"]
-
-async def fetch_funding(iso3: str) -> list[dict]:
-    async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.get(f"{BASE}/coordination-context/funding", params={
-            "location_code": iso3,
-            "app_identifier": _app_id(),
-            "limit": 10000,
-        })
-        r.raise_for_status()
-        return r.json()["data"]
-
-async def fetch_national_risk(iso3: str) -> list[dict]:
-    async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.get(f"{BASE}/coordination-context/national-risk", params={
-            "location_code": iso3,
-            "app_identifier": _app_id(),
-            "limit": 10000,
-        })
-        r.raise_for_status()
-        return r.json()["data"]
-
-async def fetch_population(iso3: str) -> list[dict]:
-    async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.get(f"{BASE}/geography-infrastructure/baseline-population", params={
-            "location_code": iso3,
-            "app_identifier": _app_id(),
-            "limit": 10000,
-        })
-        r.raise_for_status()
-        return r.json()["data"]
+```tsx
+<GlobeGL
+  heatmapsData={[{ data: fundingGapPoints }]}
+  heatmapPointLat="lat"
+  heatmapPointLng="lng"
+  heatmapPointWeight="weight"
+  heatmapBandwidth={3.5}
+  heatmapColorSaturation={2.5}
+  heatmapTopAltitude={0.4}
+/>
 ```
 
----
-
-### CBPF API (vo3)
-
-Base URL: `https://cbpfapi.unocha.org/vo3`
-
-| Endpoint | Purpose | Key Params |
-|---|---|---|
-| `/odata/PoolFundProjectSummary` | Approved project budgets + beneficiaries | `ShowAllPooledFunds=1`, `AllocationYears`, `FundTypeId=1` |
-| `/odata/PoolFundProjectDetail` | Detailed project breakdown | Same as above |
-| `/odata/PoolFundProjectSummaryWithLocationAndCluster` | Projects with cluster + geo | Same as above |
-| `/odata/PoolFundMaster` | Master list of all CBPFs | — |
-| `/odata/NarrativeReportClusterwiseBeneficiary` | Reported beneficiary data by cluster | `poolfundAbbrv` |
-
-**Implementation — `cbpf_client.py`:**
-
-```python
-import httpx
-
-BASE = "https://cbpfapi.unocha.org/vo3/odata"
-
-async def fetch_project_summaries(years: str = "2020_2026") -> list[dict]:
-    async with httpx.AsyncClient(timeout=60) as c:
-        r = await c.get(f"{BASE}/PoolFundProjectSummary", params={
-            "ShowAllPooledFunds": 1,
-            "AllocationYears": years,
-            "FundTypeId": 1,
-            "$format": "json",
-        })
-        r.raise_for_status()
-        return r.json().get("value", [])
-
-async def fetch_projects_with_clusters(fund_abbrev: str, year: int) -> list[dict]:
-    async with httpx.AsyncClient(timeout=60) as c:
-        r = await c.get(f"{BASE}/PoolFundProjectSummaryWithLocationAndCluster", params={
-            "poolfundAbbrv": f"{fund_abbrev}{str(year)[-2:]}",
-            "$format": "json",
-        })
-        r.raise_for_status()
-        return r.json().get("value", [])
-```
-
----
-
-## 1.3 Database Schema (PostgreSQL)
-
-```sql
-CREATE TABLE countries (
-    iso3          CHAR(3) PRIMARY KEY,
-    name          TEXT NOT NULL,
-    lat           FLOAT,
-    lng           FLOAT,
-    population    BIGINT
-);
-
-CREATE TABLE severity_scores (
-    id            SERIAL PRIMARY KEY,
-    iso3          CHAR(3) REFERENCES countries(iso3),
-    year          INT,
-    people_in_need BIGINT,
-    people_targeted BIGINT,
-    severity_score FLOAT,       -- normalized 0-1
-    risk_class     TEXT,         -- from national-risk endpoint
-    source        TEXT,          -- 'hno' | 'hdx_hapi'
-    fetched_at    TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE TABLE funding_records (
-    id             SERIAL PRIMARY KEY,
-    iso3           CHAR(3) REFERENCES countries(iso3),
-    year           INT,
-    requirements   FLOAT,       -- USD requested
-    funding        FLOAT,       -- USD received
-    pct_funded     FLOAT,       -- funding / requirements
-    funding_per_capita FLOAT,   -- funding / people_in_need
-    source         TEXT,
-    fetched_at     TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE TABLE projects (
-    id             SERIAL PRIMARY KEY,
-    project_code   TEXT UNIQUE,
-    iso3           CHAR(3) REFERENCES countries(iso3),
-    plan_id        INT,
-    cluster        TEXT,         -- e.g. 'Health', 'WASH', 'Food Security'
-    budget         FLOAT,
-    beneficiaries  INT,
-    cost_per_beneficiary FLOAT,  -- budget / beneficiaries
-    year           INT,
-    organization   TEXT,
-    source         TEXT          -- 'cbpf' | 'hpc'
-);
-
-CREATE TABLE mismatch_scores (
-    id             SERIAL PRIMARY KEY,
-    iso3           CHAR(3) REFERENCES countries(iso3),
-    year           INT,
-    severity_norm  FLOAT,        -- 0-1 normalized severity
-    funding_norm   FLOAT,        -- 0-1 normalized funding coverage
-    mismatch_score FLOAT,        -- severity_norm - funding_norm
-    mismatch_type  TEXT,         -- 'underfunded' | 'overfunded' | 'aligned'
-    computed_at    TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX idx_severity_iso3_year ON severity_scores(iso3, year);
-CREATE INDEX idx_funding_iso3_year ON funding_records(iso3, year);
-CREATE INDEX idx_projects_iso3 ON projects(iso3);
-CREATE INDEX idx_mismatch_iso3 ON mismatch_scores(iso3, year);
-```
-
----
-
-## 1.4 Data Ingestion Pipeline
-
-Run on startup and via a `/admin/ingest` endpoint for manual refresh.
-
-**`services/ingestion.py` — Orchestrator:**
-
-```python
-async def run_full_ingestion():
-    locations = await hdx_client.fetch_locations(has_hrp=True)
-
-    for loc in locations:
-        iso3 = loc["code"]
-        # 1. Upsert country
-        await upsert_country(iso3, loc["name"], loc["lat"], loc["lon"])
-
-        # 2. Severity data (HDX HAPI humanitarian needs)
-        needs = await hdx_client.fetch_humanitarian_needs(iso3)
-        await upsert_severity(iso3, needs)
-
-        # 3. Funding data (HDX HAPI funding + HPC FTS flows)
-        funding = await hdx_client.fetch_funding(iso3)
-        flows = await hpc_client.fetch_funding_flows(iso3, 2026)
-        await upsert_funding(iso3, funding, flows)
-
-        # 4. CBPF project-level data
-        projects = await cbpf_client.fetch_project_summaries()
-        await upsert_projects(iso3, projects)
-
-    # 5. Compute mismatch scores
-    await compute_mismatch_scores()
-```
-
-**Mismatch score computation:**
-
-```python
-async def compute_mismatch_scores():
-    """
-    severity_norm  = people_in_need / max(people_in_need across all countries)
-    funding_norm   = pct_funded / max(pct_funded across all countries)
-    mismatch_score = severity_norm - funding_norm
-
-    Positive = underfunded relative to severity
-    Negative = overfunded relative to severity
-    """
-    # Executed as a SQL query for speed
-    query = """
-    INSERT INTO mismatch_scores (iso3, year, severity_norm, funding_norm, mismatch_score, mismatch_type)
-    SELECT
-        s.iso3,
-        s.year,
-        s.people_in_need::float / NULLIF(max_pin.v, 0)   AS severity_norm,
-        f.pct_funded / NULLIF(max_pct.v, 0)               AS funding_norm,
-        (s.people_in_need::float / NULLIF(max_pin.v, 0))
-          - (f.pct_funded / NULLIF(max_pct.v, 0))         AS mismatch_score,
-        CASE
-            WHEN (s.people_in_need::float / NULLIF(max_pin.v, 0))
-               - (f.pct_funded / NULLIF(max_pct.v, 0)) > 0.2 THEN 'underfunded'
-            WHEN (s.people_in_need::float / NULLIF(max_pin.v, 0))
-               - (f.pct_funded / NULLIF(max_pct.v, 0)) < -0.2 THEN 'overfunded'
-            ELSE 'aligned'
-        END AS mismatch_type
-    FROM severity_scores s
-    JOIN funding_records f ON s.iso3 = f.iso3 AND s.year = f.year
-    CROSS JOIN (SELECT MAX(people_in_need)::float AS v FROM severity_scores) max_pin
-    CROSS JOIN (SELECT MAX(pct_funded) AS v FROM funding_records) max_pct
-    ON CONFLICT (iso3, year) DO UPDATE SET
-        severity_norm = EXCLUDED.severity_norm,
-        funding_norm = EXCLUDED.funding_norm,
-        mismatch_score = EXCLUDED.mismatch_score,
-        mismatch_type = EXCLUDED.mismatch_type,
-        computed_at = now();
-    """
-    await database.execute(query)
-```
-
----
-
-## 1.5 FastAPI Endpoints
-
-### Globe Data
-
-```
-GET /api/globe-data?year=2026
-```
-
-Returns all countries with their severity, funding, and mismatch data for the globe visualization.
-
-**Response shape:**
-
+Backend returns:
 ```json
 [
-  {
-    "iso3": "SDN",
-    "name": "Sudan",
-    "lat": 15.5,
-    "lng": 32.5,
-    "people_in_need": 33700000,
-    "people_targeted": 20400000,
-    "requirements": 2870000000,
-    "funding": 373100000,
-    "pct_funded": 13.0,
-    "funding_per_capita": 11.07,
-    "severity_norm": 1.0,
-    "funding_norm": 0.35,
-    "mismatch_score": 0.65,
-    "mismatch_type": "underfunded"
-  }
+  { "lat": 15.5, "lng": 32.5, "weight": 0.87, "country": "Sudan" },
+  { "lat": 15.3, "lng": 44.2, "weight": 0.92, "country": "Yemen" }
 ]
 ```
 
-### Mismatch Details
+**Layer 3 — Points (Individual Project Anomalies)**
+
+Render flagged projects as points with radius proportional to anomaly score.
+
+```tsx
+<GlobeGL
+  pointsData={anomalyProjects}
+  pointLat="lat"
+  pointLng="lng"
+  pointAltitude={0.1}
+  pointRadius={(d) => d.anomalyScore * 0.3}
+  pointColor={(d) => d.anomalyScore > 0.7 ? '#ff4444' : '#ffaa00'}
+  pointLabel={(d) => `
+    <b>${d.projectCode}</b><br/>
+    Budget: $${d.budget.toLocaleString()}<br/>
+    Beneficiaries: ${d.beneficiaries.toLocaleString()}<br/>
+    Cost/Person: $${d.costPerPerson.toFixed(2)}<br/>
+    Anomaly Score: ${d.anomalyScore.toFixed(2)}
+  `}
+/>
+```
+
+### 2.3 UI Layout
 
 ```
-GET /api/mismatches?year=2026&type=underfunded&sort=mismatch_score&order=desc
+┌──────────────────────────────────────────────────┐
+│  [Logo] Crisis Topography Command Center   [🎙️]  │
+├───────┬──────────────────────────────────────────┤
+│       │                                          │
+│ SIDE  │                                          │
+│ PANEL │            3D GLOBE                      │
+│       │                                          │
+│ Filter│                                          │
+│ by:   │                                          │
+│ □ Year│                                          │
+│ □ Cris│                                          │
+│ □ Clus│                                          │
+│       │                                          │
+│ ───── │                                          │
+│ Stats │                                          │
+│ Panel │                                          │
+│       ├──────────────────────────────────────────┤
+│       │  Country Detail Drawer (slides up)       │
+│       │  - Severity breakdown                    │
+│       │  - Funding vs Need bar chart             │
+│       │  - Flagged projects table                │
+└───────┴──────────────────────────────────────────┘
 ```
 
-Returns ranked list of mismatch countries.
+**Side Panel:** Country list + filters (year, crisis type, cluster). Clicking a country in the list rotates the globe to that country and opens the detail drawer.
 
-### Country Detail
+**Detail Drawer:** Slides up from the bottom on country click. Shows severity breakdown, funding vs. requirements bar chart, and a table of flagged anomaly projects for that country.
+
+**Voice Button (top-right):** Activates the ElevenLabs voice agent (see Workstream D).
+
+### 2.4 State Management
+
+Use React context for shared globe state. No external state library needed at this scale.
+
+```tsx
+// frontend/src/context/GlobeContext.tsx
+interface GlobeState {
+  selectedCountry: string | null;
+  filters: { year: number; cluster: string | null };
+  viewMode: 'severity' | 'funding-gap' | 'anomalies';
+  layersVisible: { choropleth: boolean; heatmap: boolean; points: boolean };
+}
+```
+
+### 2.5 API Calls from Frontend
+
+All calls go to the FastAPI backend. Define a single fetcher:
+
+```tsx
+// frontend/src/lib/api.ts
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+export async function fetchCountries(year?: number) {
+  const params = year ? `?year=${year}` : '';
+  const res = await fetch(`${API_BASE}/api/countries${params}`);
+  return res.json();
+}
+
+export async function fetchMismatch(year?: number) {
+  const params = year ? `?year=${year}` : '';
+  const res = await fetch(`${API_BASE}/api/mismatch${params}`);
+  return res.json();
+}
+
+export async function fetchCompare(countryA: string, countryB: string) {
+  const res = await fetch(`${API_BASE}/api/compare?a=${countryA}&b=${countryB}`);
+  return res.json();
+}
+
+export async function fetchAsk(question: string) {
+  const res = await fetch(`${API_BASE}/api/ask`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question }),
+  });
+  return res.json();
+}
+```
+
+### 2.6 GeoJSON Source
+
+Use Natural Earth 110m admin-0 countries GeoJSON (same source as globe.gl examples):
 
 ```
-GET /api/countries/{iso3}?year=2026
+https://raw.githubusercontent.com/vasturiano/globe.gl/master/example/datasets/ne_110m_admin_0_countries.geojson
 ```
 
-Returns full detail for a single country: severity breakdown, funding by cluster, project-level data, and benchmark comparisons.
+Download and place at `frontend/public/datasets/ne_110m_admin_0_countries.geojson`. The backend enriches this with severity/funding data keyed by ISO_A2 or ISO_A3 codes.
 
-**Response shape:**
+### 2.7 Frontend Deliverables Checklist
+
+- [ ] Globe renders with choropleth severity coloring
+- [ ] Heatmap overlay for funding gaps toggleable
+- [ ] Point markers for anomaly projects toggleable
+- [ ] Side panel with filters (year, cluster)
+- [ ] Country click opens detail drawer with charts
+- [ ] Globe auto-rotates to selected country
+- [ ] Voice agent button wired to ElevenLabs (Workstream D)
+- [ ] Responsive layout with Tailwind
+
+---
+
+## 3. Workstream B — Backend: FastAPI & Data Integration
+
+**Owner:** Backend developer(s)
+**Depends on:** Workstream C for ML results; can work independently for data ingestion
+
+### 3.1 Project Setup
+
+```bash
+mkdir backend && cd backend
+python -m venv venv
+source venv/bin/activate
+pip install fastapi uvicorn httpx pandas python-dotenv
+```
+
+```bash
+# backend/requirements.txt
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+httpx==0.27.0
+pandas==2.2.0
+python-dotenv==1.0.1
+```
+
+### 3.2 Application Entry Point
+
+```python
+# backend/main.py
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+from .routers import countries, mismatch, compare, ask
+from .services.data_loader import load_all_data
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.data = await load_all_data()
+    yield
+
+app = FastAPI(title="Crisis Topography API", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(countries.router, prefix="/api")
+app.include_router(mismatch.router, prefix="/api")
+app.include_router(compare.router, prefix="/api")
+app.include_router(ask.router, prefix="/api")
+```
+
+Run with: `uvicorn backend.main:app --reload --port 8000`
+
+### 3.3 Data Loading Service — HPC Tools API
+
+The HPC Tools API v1 is the primary source for plans, funding flows, and project data.
+
+**Base URL:** `https://api.hpc.tools/v1/public`
+
+**Key endpoints used:**
+
+| Endpoint | Purpose | Example |
+|---|---|---|
+| `GET /plan/year/{year}` | All HRPs for a given year | `/plan/year/2024` |
+| `GET /fts/flow?year={y}&groupby=Country` | Funding flows grouped by country | `/fts/flow?year=2024&groupby=Country` |
+| `GET /project/plan/{planID}` | All projects under a specific HRP | `/project/plan/1190` |
+| `GET /rpm/plan/year/{year}` | Plan metadata including requirements | `/rpm/plan/year/2024` |
+
+```python
+# backend/services/hpc_client.py
+import httpx
+
+HPC_BASE = "https://api.hpc.tools/v1/public"
+
+async def fetch_plans_by_year(year: int) -> dict:
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(f"{HPC_BASE}/plan/year/{year}")
+        resp.raise_for_status()
+        return resp.json()
+
+async def fetch_funding_flows(year: int, group_by: str = "Country") -> dict:
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{HPC_BASE}/fts/flow",
+            params={"year": year, "groupby": group_by}
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+async def fetch_projects_for_plan(plan_id: int) -> dict:
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(f"{HPC_BASE}/project/plan/{plan_id}")
+        resp.raise_for_status()
+        return resp.json()
+
+async def fetch_funding_by_country(country_iso3: str, year: int) -> dict:
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{HPC_BASE}/fts/flow",
+            params={"countryISO3": country_iso3, "year": year}
+        )
+        resp.raise_for_status()
+        return resp.json()
+```
+
+**HPC Flow Response Shape** (relevant fields):
 
 ```json
 {
-  "country": { "iso3": "SDN", "name": "Sudan", "lat": 15.5, "lng": 32.5 },
-  "severity": { "people_in_need": 33700000, "severity_score": 0.95 },
-  "funding": { "requirements": 2870000000, "funding": 373100000, "pct_funded": 13.0 },
-  "mismatch": { "score": 0.65, "type": "underfunded" },
-  "clusters": [
-    { "cluster": "Health", "budget": 45000000, "beneficiaries": 900000, "cost_per_beneficiary": 50.0 },
-    { "cluster": "Food Security", "budget": 120000000, "beneficiaries": 5000000, "cost_per_beneficiary": 24.0 }
-  ],
-  "benchmarks": [
-    {
-      "iso3": "YEM", "name": "Yemen", "cluster": "Health",
-      "budget": 50000000, "beneficiaries": 1100000, "cost_per_beneficiary": 45.45
+  "data": {
+    "report3": {
+      "fundingTotals": {
+        "total": 1234567890
+      }
+    },
+    "flows": [
+      {
+        "id": 123,
+        "amountUSD": 5000000,
+        "sourceObjects": [...],
+        "destinationObjects": [
+          { "type": "Plan", "id": 1190, "name": "Sudan 2024" },
+          { "type": "GlobalCluster", "id": 7, "name": "Health" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### 3.4 Data Loading Service — HDX HAPI
+
+HDX HAPI provides standardized humanitarian indicators. Requires an `app_identifier`.
+
+**Base URL:** `https://hapi.humdata.org/api/v2`
+
+**Generating the app_identifier:**
+
+```python
+import base64
+app_identifier = base64.b64encode(b"CrisisTopography:team@hacklytics.org").decode()
+# Result: "Q3Jpc2lzVG9wb2dyYXBoeTp0ZWFtQGhhY2tseXRpY3Mub3Jn"
+```
+
+**Key endpoints used:**
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /affected-people/humanitarian-needs` | People in need, severity by country + admin1 |
+| `GET /geography-infrastructure/baseline-population` | Population baselines |
+| `GET /affected-people/idps` | Internally displaced persons |
+| `GET /metadata/location` | Country list with ISO3 codes |
+
+```python
+# backend/services/hdx_client.py
+import httpx
+import base64
+
+HDX_BASE = "https://hapi.humdata.org/api/v2"
+APP_ID = base64.b64encode(b"CrisisTopography:team@hacklytics.org").decode()
+
+async def fetch_humanitarian_needs(
+    location_code: str | None = None,
+    year: int | None = None,
+    limit: int = 1000,
+    offset: int = 0
+) -> dict:
+    params = {
+        "app_identifier": APP_ID,
+        "limit": limit,
+        "offset": offset,
     }
-  ],
-  "flagged_projects": [
-    { "project_code": "SDN-24-H-001", "cluster": "Health", "budget": 5000000,
-      "beneficiaries": 500, "cost_per_beneficiary": 10000, "flag": "abnormally_high" }
+    if location_code:
+        params["location_code"] = location_code
+    if year:
+        params["reference_period_start"] = f"{year}-01-01"
+        params["reference_period_end"] = f"{year}-12-31"
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{HDX_BASE}/affected-people/humanitarian-needs",
+            params=params
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+async def fetch_population(location_code: str | None = None) -> dict:
+    params = {"app_identifier": APP_ID, "limit": 1000}
+    if location_code:
+        params["location_code"] = location_code
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{HDX_BASE}/geography-infrastructure/baseline-population",
+            params=params
+        )
+        resp.raise_for_status()
+        return resp.json()
+```
+
+**HDX HAPI Humanitarian Needs Response Shape:**
+
+```json
+{
+  "data": [
+    {
+      "resource_hdx_id": "...",
+      "location_code": "SDN",
+      "location_name": "Sudan",
+      "admin1_code": "SD01",
+      "admin1_name": "Northern",
+      "sector_code": "HEA",
+      "sector_name": "Health",
+      "population_status": "INN",
+      "population": 1500000,
+      "reference_period_start": "2024-01-01",
+      "reference_period_end": "2024-12-31"
+    }
   ]
 }
 ```
 
-### Benchmarking
+### 3.5 Unified Data Loader
 
-```
-GET /api/benchmarks?cluster=Health&year=2026
-```
-
-Returns projects grouped by cluster with cost-per-beneficiary stats (mean, median, stddev, outliers).
-
-### Voice Context (for ElevenLabs)
-
-```
-POST /api/voice-context
-```
-
-Accepts a natural-language question, queries the DB for relevant data, and returns a structured context payload that the ElevenLabs agent uses to formulate its spoken answer.
-
-**Request:**
-
-```json
-{ "question": "Why did Sudan receive less funding than Ukraine?" }
-```
-
-**Response:**
-
-```json
-{
-  "context": "Sudan has 33.7M people in need with $373M funded (13%). Ukraine has 10.8M people in need with $310M funded (13.5%). Despite Sudan having 3x the population in need, it received only 20% more total funding. Per-capita funding: Sudan $11.07, Ukraine $75.63.",
-  "countries": ["SDN", "UKR"],
-  "data_points": { ... }
-}
-```
-
----
-
-## 1.6 Backend Task Checklist
-
-| # | Task | Est. Time | Depends On |
-|---|---|---|---|
-| B1 | Scaffold FastAPI project + DB connection | 1h | — |
-| B2 | Implement HPC client (`hpc_client.py`) | 1.5h | — |
-| B3 | Implement HDX HAPI client (`hdx_client.py`) | 1.5h | — |
-| B4 | Implement CBPF client (`cbpf_client.py`) | 1h | — |
-| B5 | Create PostgreSQL schema + migrations | 1h | B1 |
-| B6 | Build ingestion pipeline | 2h | B2, B3, B4, B5 |
-| B7 | `/api/globe-data` endpoint | 1h | B6 |
-| B8 | `/api/countries/{iso3}` endpoint | 1.5h | B6 |
-| B9 | `/api/mismatches` + `/api/benchmarks` endpoints | 1.5h | B6 |
-| B10 | `/api/voice-context` endpoint | 1.5h | B6 |
-| B11 | CORS config + deploy to Vultr | 1h | B7–B10 |
-
-**Total: ~14h**
-
----
-
-# WORKSTREAM 2: Frontend — Next.js + globe.gl
-
-**Owner:** Frontend Engineer(s)
-**Priority:** Can begin scaffold immediately; globe data integration blocked on B7.
-
----
-
-## 2.1 Project Scaffold
-
-```bash
-npx create-next-app@latest frontend --typescript --tailwind --app --src-dir
-cd frontend
-npm install globe.gl three @types/three
-npm install @tanstack/react-query axios
-npm install framer-motion
-```
-
-**File structure:**
-
-```
-frontend/src/
-├── app/
-│   ├── layout.tsx
-│   ├── page.tsx              # Main globe page
-│   └── globals.css
-├── components/
-│   ├── Globe/
-│   │   ├── GlobeView.tsx     # globe.gl wrapper
-│   │   ├── GlobeControls.tsx # zoom, rotate, auto-spin
-│   │   └── layers/
-│   │       ├── HeatmapLayer.tsx
-│   │       ├── PointsLayer.tsx
-│   │       └── ArcsLayer.tsx
-│   ├── Sidebar/
-│   │   ├── FilterPanel.tsx   # Year, cluster, mismatch type
-│   │   ├── CountryDetail.tsx # Selected country info
-│   │   └── BenchmarkPanel.tsx
-│   ├── Voice/
-│   │   └── VoiceAgent.tsx    # ElevenLabs widget
-│   └── ui/
-│       ├── Tooltip.tsx
-│       └── Legend.tsx
-├── hooks/
-│   ├── useGlobeData.ts       # React Query fetch
-│   ├── useCountryDetail.ts
-│   └── useMismatches.ts
-├── lib/
-│   ├── api.ts                # Axios instance
-│   └── types.ts              # TypeScript interfaces
-└── store/
-    └── useAppStore.ts        # Zustand for globe state
-```
-
----
-
-## 2.2 Globe Implementation
-
-Use [globe.gl](https://github.com/vasturiano/globe.gl) which wraps Three.js with a declarative API for 3D globe rendering.
-
-**`GlobeView.tsx` — Core Component:**
-
-```tsx
-"use client";
-
-import { useEffect, useRef } from "react";
-import Globe, { GlobeInstance } from "globe.gl";
-import { useGlobeData } from "@/hooks/useGlobeData";
-import { useAppStore } from "@/store/useAppStore";
-
-export default function GlobeView() {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const globeRef = useRef<GlobeInstance | null>(null);
-  const { data, isLoading } = useGlobeData();
-  const { selectedCountry, setSelectedCountry, viewMode } = useAppStore();
-
-  useEffect(() => {
-    if (!containerRef.current) return;
-
-    const globe = Globe()(containerRef.current)
-      .globeImageUrl("//unpkg.com/three-globe/example/img/earth-night.jpg")
-      .backgroundImageUrl("//unpkg.com/three-globe/example/img/night-sky.png")
-      .width(containerRef.current.clientWidth)
-      .height(containerRef.current.clientHeight);
-
-    globeRef.current = globe;
-
-    return () => { globe._destructor?.(); };
-  }, []);
-
-  useEffect(() => {
-    if (!globeRef.current || !data) return;
-    const globe = globeRef.current;
-
-    if (viewMode === "heatmap") {
-      globe
-        .hexBinPointsData(data)
-        .hexBinPointLat((d: any) => d.lat)
-        .hexBinPointLng((d: any) => d.lng)
-        .hexBinPointWeight((d: any) => d.mismatch_score)
-        .hexAltitude((d: any) => d.sumWeight * 0.01)
-        .hexBinResolution(3)
-        .hexTopColor((d: any) => mismatchColor(d.sumWeight / d.points.length))
-        .hexSideColor((d: any) => mismatchColor(d.sumWeight / d.points.length));
-    }
-
-    if (viewMode === "points") {
-      globe
-        .pointsData(data)
-        .pointLat((d: any) => d.lat)
-        .pointLng((d: any) => d.lng)
-        .pointAltitude((d: any) => d.mismatch_score * 0.3)
-        .pointRadius((d: any) => Math.sqrt(d.people_in_need) * 0.00001)
-        .pointColor((d: any) => mismatchColor(d.mismatch_score))
-        .onPointClick((point: any) => setSelectedCountry(point.iso3));
-    }
-  }, [data, viewMode]);
-
-  return <div ref={containerRef} className="w-full h-screen" />;
-}
-
-function mismatchColor(score: number): string {
-  if (score > 0.5) return "rgba(220, 38, 38, 0.9)";   // deep red — severely underfunded
-  if (score > 0.2) return "rgba(249, 115, 22, 0.8)";   // orange — underfunded
-  if (score > -0.2) return "rgba(234, 179, 8, 0.7)";   // yellow — aligned
-  return "rgba(34, 197, 94, 0.7)";                       // green — well-funded
-}
-```
-
----
-
-## 2.3 Visualization Modes
-
-### Mode 1: Mismatch Heatmap
-
-Hex-bin aggregation on the globe surface. Height = severity. Color = mismatch direction.
-
-- **Red tall columns** = high severity + low funding (worst mismatches)
-- **Green short columns** = low severity + adequate funding
-- Uses `globe.hexBinPointsData()`
-
-### Mode 2: Crisis Points
-
-Individual points per country. Radius = population in need. Height = mismatch score.
-
-- Clickable — opens country detail sidebar
-- Uses `globe.pointsData()`
-
-### Mode 3: Funding Flow Arcs
-
-Arcs from donor regions to recipient countries. Width = funding amount.
-
-- Uses `globe.arcsData()`
-- Source coordinates: major donor country centroids
-- Destination: crisis country centroids
-- Color: green (well-funded) to red (underfunded)
-
-### Mode 4: Choropleth Polygons
-
-Country polygons colored by mismatch score.
-
-- Uses `globe.polygonsData()` with GeoJSON country boundaries
-- Source: Natural Earth GeoJSON (`ne_110m_admin_0_countries.geojson`)
-- Color scale: green → yellow → red based on `mismatch_score`
-
----
-
-## 2.4 Sidebar UI
-
-```
-┌─────────────────────────────────┐
-│  HAXLYTICS                      │
-│  ─────────────────────────────  │
-│  Year: [2024] [2025] [2026]     │
-│  View: [Heatmap] [Points] [Arc] │
-│  Filter: [All] [Underfunded]    │
-│           [Overfunded] [Aligned]│
-│  Cluster: [All ▾]               │
-│  ─────────────────────────────  │
-│  🔴 Sudan          mismatch 0.65│
-│  🔴 Yemen          mismatch 0.58│
-│  🟠 Haiti          mismatch 0.42│
-│  🟡 Colombia       mismatch 0.15│
-│  🟢 Ukraine        mismatch 0.02│
-│  ─────────────────────────────  │
-│  SELECTED: Sudan                │
-│  People in need: 33.7M          │
-│  Funded: 13.0% ($373M / $2.87B)│
-│  Funding/capita: $11.07         │
-│  ─────────────────────────────  │
-│  Cluster Breakdown:             │
-│  Health     $50/person          │
-│  Food Sec   $24/person          │
-│  WASH       $18/person          │
-│  ─────────────────────────────  │
-│  ⚠ Flagged Projects:            │
-│  SDN-24-H-001 $10,000/person   │
-│  ─────────────────────────────  │
-│  Benchmarks (vs similar crises):│
-│  Yemen Health: $45/person       │
-│  Somalia Health: $38/person     │
-│  ─────────────────────────────  │
-│  🎙 Ask a question...            │
-└─────────────────────────────────┘
-```
-
----
-
-## 2.5 Data Fetching Hooks
-
-```typescript
-// lib/api.ts
-import axios from "axios";
-
-export const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api",
-});
-
-// hooks/useGlobeData.ts
-import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
-
-export function useGlobeData(year = 2026) {
-  return useQuery({
-    queryKey: ["globe-data", year],
-    queryFn: () => api.get(`/globe-data?year=${year}`).then((r) => r.data),
-    staleTime: 5 * 60 * 1000,
-  });
-}
-
-// hooks/useCountryDetail.ts
-export function useCountryDetail(iso3: string | null, year = 2026) {
-  return useQuery({
-    queryKey: ["country", iso3, year],
-    queryFn: () => api.get(`/countries/${iso3}?year=${year}`).then((r) => r.data),
-    enabled: !!iso3,
-  });
-}
-```
-
----
-
-## 2.6 Frontend Task Checklist
-
-| # | Task | Est. Time | Depends On |
-|---|---|---|---|
-| F1 | Scaffold Next.js + install deps | 0.5h | — |
-| F2 | Globe component with static data | 2h | F1 |
-| F3 | Heatmap layer | 1.5h | F2 |
-| F4 | Points layer with click handler | 1.5h | F2 |
-| F5 | Choropleth polygon layer | 1.5h | F2 |
-| F6 | Arc layer (funding flows) | 1h | F2 |
-| F7 | Sidebar: filters (year, view, cluster) | 1.5h | F1 |
-| F8 | Sidebar: country detail panel | 1.5h | F7, B8 |
-| F9 | Sidebar: benchmark comparison panel | 1h | F8, B9 |
-| F10 | Connect to live API (hooks + React Query) | 1.5h | B7 |
-| F11 | Color legend + tooltip overlays | 1h | F3 |
-| F12 | ElevenLabs voice widget integration | 2h | A1 |
-| F13 | Responsive layout + polish | 1.5h | F7–F11 |
-
-**Total: ~17h**
-
----
-
-# WORKSTREAM 3: Databricks — ML + Mismatch Detection Engine
-
-**Owner:** Data/ML Engineer
-**Priority:** Can begin in parallel once raw data is available (after B6).
-
----
-
-## 3.1 Databricks Setup
-
-Use the **Databricks Free Edition** (replaces Community Edition). Sign up at `databricks.com/signup/free-edition`.
-
-Alternatively, deploy a Databricks workspace on the Vultr GPU instance if the free tier is too limited:
-
-```bash
-# On Vultr GPU instance — run Spark standalone for local development
-pip install pyspark databricks-connect pandas scikit-learn
-```
-
----
-
-## 3.2 Data Pipeline (ETL in Databricks)
-
-### Step 1: Ingest Raw Data
-
-Pull from the same APIs as the backend, but into Spark DataFrames for large-scale processing.
+Combines both APIs into a single cached dataset on startup:
 
 ```python
+# backend/services/data_loader.py
+import pandas as pd
+from .hpc_client import fetch_plans_by_year, fetch_funding_flows
+from .hdx_client import fetch_humanitarian_needs, fetch_population
+
+async def load_all_data(years: list[int] = [2023, 2024, 2025]) -> dict:
+    all_plans = []
+    all_flows = []
+    all_needs = []
+
+    for year in years:
+        plans = await fetch_plans_by_year(year)
+        all_plans.extend(plans.get("data", []))
+
+        flows = await fetch_funding_flows(year)
+        all_flows.append(flows)
+
+        needs = await fetch_humanitarian_needs(year=year)
+        all_needs.extend(needs.get("data", []))
+
+    population = await fetch_population()
+
+    return {
+        "plans": pd.DataFrame(all_plans),
+        "flows_raw": all_flows,
+        "needs": pd.DataFrame(all_needs),
+        "population": pd.DataFrame(population.get("data", [])),
+    }
+```
+
+### 3.6 API Router Definitions
+
+**GET `/api/countries?year=2024`**
+
+Returns enriched country data for globe rendering.
+
+```python
+# backend/routers/countries.py
+from fastapi import APIRouter, Request
+
+router = APIRouter()
+
+@router.get("/countries")
+async def get_countries(request: Request, year: int = 2024):
+    data = request.app.state.data
+    needs_df = data["needs"]
+
+    filtered = needs_df[
+        needs_df["reference_period_start"].str.startswith(str(year))
+    ]
+
+    country_agg = filtered.groupby("location_code").agg({
+        "population": "sum",
+        "location_name": "first",
+    }).reset_index()
+
+    return {
+        "year": year,
+        "countries": country_agg.to_dict(orient="records")
+    }
+```
+
+**GET `/api/mismatch?year=2024`**
+
+Returns the mismatch scores — merges severity with funding coverage per country.
+
+```python
+# backend/routers/mismatch.py
+from fastapi import APIRouter, Request
+
+router = APIRouter()
+
+@router.get("/mismatch")
+async def get_mismatch(request: Request, year: int = 2024):
+    # Mismatch data is computed by Databricks and cached
+    # Falls back to on-the-fly calculation if Databricks result unavailable
+    ...
+    return {
+        "year": year,
+        "mismatches": [
+            {
+                "iso3": "SDN",
+                "country": "Sudan",
+                "severity": 4.2,
+                "fundingRequested": 2800000000,
+                "fundingReceived": 840000000,
+                "coverageRatio": 0.30,
+                "mismatchScore": 0.87,
+                "peopleInNeed": 24800000,
+                "fundingPerCapita": 33.87
+            }
+        ]
+    }
+```
+
+**GET `/api/compare?a=SDN&b=UKR`**
+
+Side-by-side comparison of two countries.
+
+**POST `/api/ask`** `{ "question": "Why did Sudan receive less funding than Ukraine?" }`
+
+Proxies to Databricks vector search + LLM for RAG-based answer. Returns text for ElevenLabs to speak.
+
+### 3.7 Backend Directory Structure
+
+```
+backend/
+├── main.py
+├── requirements.txt
+├── .env                    # DATABRICKS_HOST, DATABRICKS_TOKEN, ELEVENLABS_API_KEY
+├── routers/
+│   ├── countries.py
+│   ├── mismatch.py
+│   ├── compare.py
+│   └── ask.py
+└── services/
+    ├── hpc_client.py       # HPC Tools API calls
+    ├── hdx_client.py       # HDX HAPI API calls
+    ├── data_loader.py      # Startup data ingestion
+    ├── databricks_client.py# Databricks SQL + Vector Search
+    └── mismatch_engine.py  # Fallback mismatch calculator
+```
+
+### 3.8 Backend Deliverables Checklist
+
+- [ ] FastAPI app with CORS configured for Next.js
+- [ ] HPC client fetching plans, flows, projects
+- [ ] HDX HAPI client fetching humanitarian needs + population
+- [ ] Startup data loader caching to `app.state`
+- [ ] `/api/countries` endpoint returning enriched country data
+- [ ] `/api/mismatch` endpoint returning mismatch scores
+- [ ] `/api/compare` endpoint for country comparison
+- [ ] `/api/ask` endpoint proxying to Databricks RAG
+- [ ] Fallback mismatch engine for offline Databricks
+
+---
+
+## 4. Workstream C — Databricks: Pipeline & ML
+
+**Owner:** Data/ML engineer(s)
+**Depends on:** Raw data from HPC + HDX HAPI (can use backend client code or call APIs directly from notebooks)
+
+### 4.1 Free Edition Constraints
+
+| Resource | Limit |
+|---|---|
+| Compute | Serverless only, small cluster sizes |
+| SQL Warehouse | 1 warehouse, 2X-Small max |
+| Vector Search | 1 endpoint, 1 unit. No Direct Vector Access |
+| Jobs | Max 5 concurrent tasks |
+| Apps | 1 app, auto-stops after 24h |
+| Languages | Python only (no R, no Scala) |
+| GPU | None available |
+| Outbound network | Limited to trusted domains |
+
+**Implication:** All ML must use CPU-friendly algorithms (scikit-learn, not deep learning). Vector search is available but limited to 1 endpoint.
+
+### 4.2 Notebook 1 — Data Ingestion
+
+Create a Databricks notebook that pulls from both APIs and writes to Delta tables.
+
+```python
+# Notebook: 01_data_ingestion
 import requests
 import pandas as pd
-from pyspark.sql import SparkSession
+import base64
 
-spark = SparkSession.builder.appName("haxlytics").getOrCreate()
+HPC_BASE = "https://api.hpc.tools/v1/public"
+HDX_BASE = "https://hapi.humdata.org/api/v2"
+APP_ID = base64.b64encode(b"CrisisTopography:team@hacklytics.org").decode()
 
-def ingest_hpc_plans(years: range) -> pd.DataFrame:
-    all_plans = []
-    for year in years:
-        r = requests.get(f"https://api.hpc.tools/v1/public/plan/year/{year}")
-        plans = r.json()["data"]
-        for p in plans:
-            all_plans.append({
-                "plan_id": p["id"],
-                "year": year,
-                "name": p.get("planVersion", {}).get("name", ""),
-                "iso3": p["locations"][0]["iso3"] if p.get("locations") else None,
-                "requirements": p.get("requirements", {}).get("revisedRequirements"),
-                "funding": p.get("funding", {}).get("totalFunding"),
-            })
-    return pd.DataFrame(all_plans)
+# --- Fetch HRP plans for years 2020-2025 ---
+all_plans = []
+for year in range(2020, 2026):
+    resp = requests.get(f"{HPC_BASE}/plan/year/{year}")
+    if resp.ok:
+        all_plans.extend(resp.json().get("data", []))
 
-plans_pdf = ingest_hpc_plans(range(2015, 2027))
-plans_df = spark.createDataFrame(plans_pdf)
-plans_df.write.mode("overwrite").saveAsTable("haxlytics.plans")
+plans_df = spark.createDataFrame(pd.DataFrame(all_plans))
+plans_df.write.format("delta").mode("overwrite").saveAsTable("crisis.plans")
+
+# --- Fetch funding flows grouped by country ---
+all_flows = []
+for year in range(2020, 2026):
+    resp = requests.get(f"{HPC_BASE}/fts/flow", params={"year": year, "groupby": "Country"})
+    if resp.ok:
+        report = resp.json().get("data", {}).get("report3", {}).get("rows", [])
+        for row in report:
+            row["year"] = year
+            all_flows.append(row)
+
+flows_df = spark.createDataFrame(pd.DataFrame(all_flows))
+flows_df.write.format("delta").mode("overwrite").saveAsTable("crisis.funding_flows")
+
+# --- Fetch humanitarian needs from HDX HAPI ---
+all_needs = []
+offset = 0
+while True:
+    resp = requests.get(
+        f"{HDX_BASE}/affected-people/humanitarian-needs",
+        params={"app_identifier": APP_ID, "limit": 1000, "offset": offset}
+    )
+    data = resp.json().get("data", [])
+    if not data:
+        break
+    all_needs.extend(data)
+    offset += 1000
+
+needs_df = spark.createDataFrame(pd.DataFrame(all_needs))
+needs_df.write.format("delta").mode("overwrite").saveAsTable("crisis.humanitarian_needs")
+
+# --- Fetch population baselines ---
+resp = requests.get(
+    f"{HDX_BASE}/geography-infrastructure/baseline-population",
+    params={"app_identifier": APP_ID, "limit": 10000}
+)
+pop_df = spark.createDataFrame(pd.DataFrame(resp.json().get("data", [])))
+pop_df.write.format("delta").mode("overwrite").saveAsTable("crisis.population")
 ```
 
-### Step 2: Build Feature Table
+### 4.3 Notebook 2 — Mismatch Detection Engine
+
+This is the core analytical model. It computes a **mismatch score** per country-year and flags **anomaly projects**.
 
 ```python
+# Notebook: 02_mismatch_engine
+
 from pyspark.sql import functions as F
 
-features_df = (
-    spark.table("haxlytics.plans")
-    .join(spark.table("haxlytics.severity"), ["iso3", "year"])
-    .join(spark.table("haxlytics.cbpf_projects"), ["iso3", "year"], "left")
-    .withColumn("funding_gap", F.col("requirements") - F.col("funding"))
-    .withColumn("pct_funded", F.col("funding") / F.col("requirements"))
-    .withColumn("funding_per_capita", F.col("funding") / F.col("people_in_need"))
-    .withColumn("severity_norm", F.col("people_in_need") / F.lit(max_pin))
-    .withColumn("funding_norm", F.col("pct_funded") / F.lit(max_pct))
-    .withColumn("mismatch_score", F.col("severity_norm") - F.col("funding_norm"))
+# --- Load tables ---
+needs = spark.table("crisis.humanitarian_needs")
+flows = spark.table("crisis.funding_flows")
+plans = spark.table("crisis.plans")
+
+# --- Country-Level Mismatch ---
+# Aggregate severity: total people in need per country-year
+severity = needs.groupBy("location_code", "location_name").agg(
+    F.sum("population").alias("people_in_need"),
+    F.count("*").alias("sector_count")
 )
 
-features_df.write.mode("overwrite").saveAsTable("haxlytics.features")
+# Merge with funding flows
+# flows contains: country ISO3, totalFunding, year
+country_mismatch = severity.join(
+    flows,
+    severity["location_code"] == flows["countryISO3"],
+    "left"
+)
+
+# Compute mismatch score:
+# mismatch = 1 - (funding_received / funding_required)
+# Normalized severity rank vs funding rank
+country_mismatch = country_mismatch.withColumn(
+    "funding_per_capita",
+    F.col("totalFunding") / F.col("people_in_need")
+)
+
+# Rank-based mismatch: high severity rank + low funding rank = high mismatch
+from pyspark.sql.window import Window
+
+w = Window.orderBy(F.desc("people_in_need"))
+country_mismatch = country_mismatch.withColumn("severity_rank", F.rank().over(w))
+
+w2 = Window.orderBy(F.desc("funding_per_capita"))
+country_mismatch = country_mismatch.withColumn("funding_rank", F.rank().over(w2))
+
+country_mismatch = country_mismatch.withColumn(
+    "mismatch_score",
+    (F.col("severity_rank") - F.col("funding_rank")) / F.lit(100)
+)
+
+country_mismatch.write.format("delta").mode("overwrite").saveAsTable("crisis.country_mismatch")
 ```
 
----
+### 4.4 Notebook 3 — Project-Level Anomaly Detection
 
-## 3.3 ML Models
-
-### Model 1: Mismatch Anomaly Detector
-
-Flags countries where funding is statistically misaligned with severity.
+Flag projects with unusually high or low beneficiary-to-budget ratios using Isolation Forest.
 
 ```python
-from sklearn.ensemble import IsolationForest
+# Notebook: 03_project_anomalies
+
 import pandas as pd
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
 
-features_pdf = spark.table("haxlytics.features").toPandas()
+# Fetch project data from HPC API for a set of plans
+import requests
 
-X = features_pdf[["severity_norm", "funding_norm", "funding_per_capita", "pct_funded"]].fillna(0)
+HPC_BASE = "https://api.hpc.tools/v1/public"
+plan_ids = spark.table("crisis.plans").select("id").collect()
 
-model = IsolationForest(contamination=0.15, random_state=42)
-features_pdf["anomaly"] = model.fit_predict(X)
-features_pdf["is_mismatch_anomaly"] = features_pdf["anomaly"] == -1
-```
+all_projects = []
+for row in plan_ids:
+    resp = requests.get(f"{HPC_BASE}/project/plan/{row.id}")
+    if resp.ok:
+        projects = resp.json().get("data", [])
+        for p in projects:
+            all_projects.append({
+                "projectCode": p.get("code"),
+                "planId": row.id,
+                "budget": p.get("currentRequestedFunds", 0),
+                "beneficiaries": p.get("targetBeneficiaries", 0),
+                "cluster": p.get("globalClusters", [{}])[0].get("name", "Unknown"),
+                "countryISO3": p.get("locations", [{}])[0].get("iso3", ""),
+            })
 
-### Model 2: Cost-per-Beneficiary Outlier Detection (Project Level)
-
-Flags projects with abnormal beneficiary-to-budget ratios within the same cluster.
-
-```python
-from scipy import stats
-
-projects_pdf = spark.table("haxlytics.cbpf_projects").toPandas()
-projects_pdf["cost_per_beneficiary"] = projects_pdf["budget"] / projects_pdf["beneficiaries"].replace(0, pd.NA)
-
-def flag_outliers(group):
-    if len(group) < 5:
-        group["z_score"] = 0
-    else:
-        group["z_score"] = stats.zscore(group["cost_per_beneficiary"].fillna(0))
-    group["is_outlier"] = group["z_score"].abs() > 2
-    return group
-
-flagged = projects_pdf.groupby("cluster", group_keys=False).apply(flag_outliers)
-```
-
-### Model 3: Funding Prediction (Why do some crises get less?)
-
-A regression model that predicts expected funding given severity indicators, then compares prediction vs actual to quantify "underfunding".
-
-```python
-from sklearn.ensemble import GradientBoostedRegressor
-from sklearn.model_selection import train_test_split
-
-feature_cols = [
-    "people_in_need", "severity_score", "population",
-    "conflict_events", "idps", "refugees"
+projects_pdf = pd.DataFrame(all_projects)
+projects_pdf = projects_pdf[
+    (projects_pdf["budget"] > 0) & (projects_pdf["beneficiaries"] > 0)
 ]
+projects_pdf["cost_per_person"] = projects_pdf["budget"] / projects_pdf["beneficiaries"]
 
-X = features_pdf[feature_cols].fillna(0)
-y = features_pdf["funding"].fillna(0)
+# Isolation Forest for anomaly detection
+features = projects_pdf[["budget", "beneficiaries", "cost_per_person"]].values
+scaler = StandardScaler()
+features_scaled = scaler.fit_transform(features)
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+model = IsolationForest(contamination=0.1, random_state=42)
+projects_pdf["anomaly_label"] = model.fit_predict(features_scaled)
+projects_pdf["anomaly_score"] = -model.decision_function(features_scaled)
 
-model = GradientBoostedRegressor(n_estimators=200, max_depth=5, random_state=42)
-model.fit(X_train, y_train)
+# anomaly_label: -1 = anomaly, 1 = normal
+anomalies = projects_pdf[projects_pdf["anomaly_label"] == -1]
 
-features_pdf["predicted_funding"] = model.predict(X)
-features_pdf["funding_deficit"] = features_pdf["predicted_funding"] - features_pdf["funding"]
+anomalies_sdf = spark.createDataFrame(anomalies)
+anomalies_sdf.write.format("delta").mode("overwrite").saveAsTable("crisis.project_anomalies")
 ```
 
-Feature importance from this model directly answers: "What factors predict funding?" — and the deficit column answers: "Who is getting less than they should?"
+### 4.5 Notebook 4 — Vectorization for RAG
 
----
-
-## 3.4 Databricks → Backend Integration
-
-Export model outputs back to PostgreSQL for the API to serve:
+Vectorize country-level crisis summaries for semantic search. Uses Databricks Vector Search (1 free endpoint).
 
 ```python
-import psycopg2
+# Notebook: 04_vectorize_for_rag
 
-conn = psycopg2.connect(
-    host=VULTR_DB_HOST, dbname="haxlytics",
-    user="haxlytics", password=DB_PASSWORD
+from databricks.vector_search.client import VectorSearchClient
+
+vsc = VectorSearchClient()
+
+# Create the vector search endpoint (only 1 allowed on Free Edition)
+vsc.create_endpoint(name="crisis-rag-endpoint")
+
+# Prepare text documents: one per country-year with crisis summary
+mismatch = spark.table("crisis.country_mismatch").toPandas()
+
+documents = []
+for _, row in mismatch.iterrows():
+    text = (
+        f"Country: {row['location_name']} ({row['location_code']}). "
+        f"People in need: {row['people_in_need']:,.0f}. "
+        f"Total funding: ${row['totalFunding']:,.0f}. "
+        f"Funding per capita: ${row['funding_per_capita']:.2f}. "
+        f"Mismatch score: {row['mismatch_score']:.3f}. "
+        f"Severity rank: {row['severity_rank']}. "
+        f"Funding rank: {row['funding_rank']}."
+    )
+    documents.append({
+        "id": f"{row['location_code']}_{row.get('year', 2024)}",
+        "text": text,
+        "location_code": row["location_code"],
+    })
+
+docs_df = spark.createDataFrame(pd.DataFrame(documents))
+docs_df.write.format("delta").mode("overwrite").saveAsTable("crisis.rag_documents")
+
+# Create vector search index on the Delta table
+# Uses Databricks-managed embeddings (no GPU needed, serverless)
+vsc.create_delta_sync_index(
+    endpoint_name="crisis-rag-endpoint",
+    index_name="crisis.rag_index",
+    source_table_name="crisis.rag_documents",
+    pipeline_type="TRIGGERED",
+    primary_key="id",
+    embedding_source_column="text",
+    embedding_model_endpoint_name="databricks-bge-large-en"
+)
+```
+
+**Querying the vector index** (used by the `/api/ask` endpoint):
+
+```python
+# backend/services/databricks_client.py
+import httpx
+import os
+
+DATABRICKS_HOST = os.getenv("DATABRICKS_HOST")
+DATABRICKS_TOKEN = os.getenv("DATABRICKS_TOKEN")
+
+async def vector_search(query: str, num_results: int = 5) -> list[dict]:
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{DATABRICKS_HOST}/api/2.0/vector-search/indexes/crisis.rag_index/query",
+            headers={"Authorization": f"Bearer {DATABRICKS_TOKEN}"},
+            json={
+                "query_text": query,
+                "columns": ["id", "text", "location_code"],
+                "num_results": num_results
+            }
+        )
+        resp.raise_for_status()
+        return resp.json().get("result", {}).get("data_array", [])
+```
+
+### 4.6 Notebook 5 — Benchmarking Comparable Projects
+
+Group projects by cluster, compute percentile bands, and flag outliers.
+
+```python
+# Notebook: 05_benchmarking
+
+projects = spark.table("crisis.project_anomalies")
+
+# Per-cluster statistics
+from pyspark.sql import functions as F
+
+cluster_stats = projects.groupBy("cluster").agg(
+    F.avg("cost_per_person").alias("avg_cost"),
+    F.stddev("cost_per_person").alias("std_cost"),
+    F.percentile_approx("cost_per_person", 0.25).alias("p25"),
+    F.percentile_approx("cost_per_person", 0.50).alias("median"),
+    F.percentile_approx("cost_per_person", 0.75).alias("p75"),
+    F.count("*").alias("project_count")
 )
 
-# Write mismatch anomalies
-mismatch_df = features_pdf[["iso3", "year", "severity_norm", "funding_norm",
-                             "mismatch_score", "is_mismatch_anomaly",
-                             "predicted_funding", "funding_deficit"]]
-mismatch_df.to_sql("ml_mismatch_results", conn, if_exists="replace", index=False)
+cluster_stats.write.format("delta").mode("overwrite").saveAsTable("crisis.cluster_benchmarks")
 
-# Write flagged projects
-flagged[["project_code", "iso3", "cluster", "budget", "beneficiaries",
-         "cost_per_beneficiary", "z_score", "is_outlier"]].to_sql(
-    "ml_flagged_projects", conn, if_exists="replace", index=False
-)
+# Join back to find comparable projects for any given project
+# A "comparable" = same cluster, cost_per_person within ±1 std of cluster mean
 ```
 
----
+### 4.7 Databricks Deliverables Checklist
 
-## 3.5 Databricks Task Checklist
-
-| # | Task | Est. Time | Depends On |
-|---|---|---|---|
-| D1 | Set up Databricks workspace / Spark env | 1h | — |
-| D2 | Ingest HPC plans (1999–2026) into tables | 2h | D1 |
-| D3 | Ingest HDX HAPI + CBPF data | 2h | D1 |
-| D4 | Build feature table (join + engineer) | 1.5h | D2, D3 |
-| D5 | Isolation Forest mismatch detector | 1.5h | D4 |
-| D6 | Cost-per-beneficiary outlier flagging | 1h | D4 |
-| D7 | Funding prediction regression model | 2h | D4 |
-| D8 | Export results to PostgreSQL | 1h | D5, D6, D7 |
-| D9 | Feature importance analysis + narrative | 1h | D7 |
-
-**Total: ~13h**
+- [ ] Notebook 01: Ingest HPC + HDX HAPI data into Delta tables
+- [ ] Notebook 02: Country-level mismatch score computation
+- [ ] Notebook 03: Project-level anomaly detection (Isolation Forest)
+- [ ] Notebook 04: Vectorize crisis summaries + create Vector Search index
+- [ ] Notebook 05: Cluster benchmarking statistics
+- [ ] Delta tables: `crisis.plans`, `crisis.funding_flows`, `crisis.humanitarian_needs`, `crisis.population`, `crisis.country_mismatch`, `crisis.project_anomalies`, `crisis.rag_documents`, `crisis.cluster_benchmarks`
 
 ---
 
-# WORKSTREAM 4: AI + Voice Integration — ElevenLabs
+## 5. Workstream D — AI Integration: ElevenLabs Voice Agent
 
-**Owner:** AI/Frontend Engineer
-**Priority:** Scaffold early (A1-A2), full integration after B10 and F12.
+**Owner:** AI/UX integrator
+**Depends on:** Workstream A (Globe component), Workstream B (`/api/ask` endpoint)
 
----
+### 5.1 ElevenLabs Agent Setup
 
-## 4.1 ElevenLabs Setup
+Create a Conversational AI agent in the ElevenLabs dashboard:
 
-1. Create an ElevenLabs account at `elevenlabs.io`
-2. Navigate to **Conversational AI → Agents** in the dashboard
-3. Create a new agent with the following config:
+1. Go to **ElevenLabs Dashboard > Agents** (or ElevenAgents)
+2. Create new agent with:
+   - **Name:** Crisis Analyst
+   - **Voice:** Pick a clear, professional voice
+   - **System prompt:**
+     ```
+     You are a humanitarian crisis analyst assistant. You help users understand
+     funding mismatches in global humanitarian crises. You have access to data
+     about humanitarian needs, funding flows, and project-level budgets.
+     When asked about a specific country or crisis, provide concise, data-backed
+     answers about severity scores, funding gaps, and notable anomalies.
+     Always cite specific numbers when available.
+     ```
+   - **Knowledge Base:** Upload the mismatch summary CSV from Databricks (export from `crisis.country_mismatch`)
+   - **Tools:** Add a custom API tool pointing to your deployed `/api/ask` endpoint
+3. Copy the **Agent ID** for frontend integration
 
-**Agent Configuration:**
-
-| Setting | Value |
-|---|---|
-| Name | Haxlytics Crisis Analyst |
-| Voice | Rachel (or any clear, authoritative voice) |
-| Language | English |
-| LLM | GPT-4o (default) or Claude |
-| First Message | "Hello, I'm your crisis funding analyst. Ask me about any country's humanitarian situation or funding gaps." |
-
-**System Prompt for the Agent:**
-
-```
-You are a humanitarian funding analyst for the Haxlytics platform. You have access to
-real-time data about humanitarian crises, funding allocations, and mismatch scores from
-OCHA, HDX HAPI, and CBPF databases.
-
-When a user asks about a country or comparison:
-1. Call the get_country_context tool with the relevant ISO3 codes
-2. Present the data conversationally: severity, funding %, per-capita funding
-3. Highlight mismatches and anomalies
-4. Suggest reasons based on the data (media visibility, geopolitics, access constraints)
-5. Reference benchmark comparisons when relevant
-
-Always cite specific numbers. Be empathetic but data-driven.
-```
-
----
-
-## 4.2 Agent Tool Definition (Server-Side)
-
-Register a custom tool in the ElevenLabs agent dashboard that calls back to your FastAPI server.
-
-**Tool: `get_country_context`**
-
-```json
-{
-  "name": "get_country_context",
-  "description": "Retrieve humanitarian crisis and funding data for one or more countries",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "question": {
-        "type": "string",
-        "description": "The user's question about humanitarian funding"
-      },
-      "countries": {
-        "type": "array",
-        "items": { "type": "string" },
-        "description": "ISO3 codes of countries mentioned (e.g. ['SDN', 'UKR'])"
-      }
-    },
-    "required": ["question"]
-  }
-}
-```
-
-**Webhook URL:** `https://your-vultr-server.com/api/voice-context`
-
-When the agent's LLM decides to call this tool, ElevenLabs sends a POST to your FastAPI `/api/voice-context` endpoint. Your backend queries the DB, formats context, and returns it. The LLM then uses that context to generate a spoken answer.
-
----
-
-## 4.3 Frontend Voice Widget
-
-Install the ElevenLabs React SDK:
+### 5.2 React Integration
 
 ```bash
-npm install @11labs/react
+cd frontend
+npm install @elevenlabs/react
 ```
 
-**`Voice/VoiceAgent.tsx`:**
-
 ```tsx
-"use client";
+// frontend/src/components/VoiceAgent.tsx
+'use client';
 
-import { useConversation } from "@11labs/react";
-import { useCallback, useState } from "react";
-import { useAppStore } from "@/store/useAppStore";
+import { useConversation } from '@elevenlabs/react';
+import { useCallback, useState } from 'react';
+import { useGlobeContext } from '@/context/GlobeContext';
 
-export default function VoiceAgent() {
+const AGENT_ID = process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID!;
+
+export function VoiceAgent() {
   const [isActive, setIsActive] = useState(false);
-  const { setSelectedCountry, setHighlightedCountries } = useAppStore();
+  const { setSelectedCountry, setFilters } = useGlobeContext();
 
   const conversation = useConversation({
-    onMessage: (message) => {
-      // Parse agent responses for country references to highlight on globe
-      const isoPattern = /\b([A-Z]{3})\b/g;
-      const matches = message.message.match(isoPattern);
-      if (matches) setHighlightedCountries(matches);
+    clientTools: {
+      navigateToCountry: ({ iso3 }: { iso3: string }) => {
+        setSelectedCountry(iso3);
+        return `Navigated to ${iso3}`;
+      },
+      filterByCrisis: ({ cluster }: { cluster: string }) => {
+        setFilters(prev => ({ ...prev, cluster }));
+        return `Filtered to ${cluster}`;
+      },
+      filterByYear: ({ year }: { year: number }) => {
+        setFilters(prev => ({ ...prev, year }));
+        return `Showing data for ${year}`;
+      },
     },
-    onError: (error) => console.error("Voice error:", error),
+    onMessage: (message) => {
+      console.log('Agent:', message);
+    },
+    onError: (error) => {
+      console.error('Voice agent error:', error);
+    },
   });
 
-  const startConversation = useCallback(async () => {
-    await navigator.mediaDevices.getUserMedia({ audio: true });
-    await conversation.startSession({
-      agentId: process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID!,
-    });
-    setIsActive(true);
-  }, [conversation]);
-
-  const stopConversation = useCallback(async () => {
-    await conversation.endSession();
-    setIsActive(false);
-  }, [conversation]);
+  const handleToggle = useCallback(async () => {
+    if (isActive) {
+      await conversation.endSession();
+      setIsActive(false);
+    } else {
+      await navigator.mediaDevices.getUserMedia({ audio: true });
+      await conversation.startSession({ agentId: AGENT_ID });
+      setIsActive(true);
+    }
+  }, [isActive, conversation]);
 
   return (
-    <div className="fixed bottom-6 right-6 z-50">
-      <button
-        onClick={isActive ? stopConversation : startConversation}
-        className={`w-16 h-16 rounded-full flex items-center justify-center shadow-xl
-          transition-all duration-300 ${
-            isActive
-              ? "bg-red-500 animate-pulse"
-              : "bg-blue-600 hover:bg-blue-700"
-          }`}
-      >
-        <MicIcon className="w-8 h-8 text-white" />
-      </button>
-      {isActive && (
-        <div className="absolute bottom-20 right-0 bg-gray-900/90 text-white
-          rounded-xl p-4 w-72 backdrop-blur-sm">
-          <p className="text-sm text-gray-300">
-            {conversation.isSpeaking ? "Speaking..." : "Listening..."}
-          </p>
-          <p className="text-xs text-gray-500 mt-2">
-            Try: &quot;Why did Sudan receive less funding than Ukraine?&quot;
-          </p>
-        </div>
-      )}
-    </div>
+    <button
+      onClick={handleToggle}
+      className={`fixed top-4 right-4 z-50 p-4 rounded-full shadow-lg transition-all ${
+        isActive
+          ? 'bg-red-500 hover:bg-red-600 animate-pulse'
+          : 'bg-blue-600 hover:bg-blue-700'
+      }`}
+    >
+      <MicIcon className="w-6 h-6 text-white" />
+      <span className="sr-only">
+        {isActive ? 'Stop voice agent' : 'Start voice agent'}
+      </span>
+    </button>
+  );
+}
+
+function MicIcon({ className }: { className: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M19 11a7 7 0 01-14 0m7 7v4m-4 0h8m-4-18a3 3 0 00-3 3v4a3 3 0 006 0V7a3 3 0 00-3-3z"
+      />
+    </svg>
   );
 }
 ```
 
----
+### 5.3 Client Tools — Voice-Driven Globe Navigation
 
-## 4.4 Voice-Driven Globe Navigation
+The ElevenLabs agent must be configured (in the dashboard) with three client-side tools so the voice agent can control the globe:
 
-When the user asks about a country via voice, the agent's response triggers globe navigation:
+**Tool 1: `navigateToCountry`**
 
-```tsx
-// In GlobeView.tsx — respond to voice-selected countries
-const { highlightedCountries } = useAppStore();
-
-useEffect(() => {
-  if (!globeRef.current || highlightedCountries.length === 0) return;
-
-  const target = data?.find((d) => d.iso3 === highlightedCountries[0]);
-  if (target) {
-    globeRef.current.pointOfView(
-      { lat: target.lat, lng: target.lng, altitude: 1.5 },
-      1000 // animation duration ms
-    );
-    setSelectedCountry(target.iso3);
+```json
+{
+  "name": "navigateToCountry",
+  "description": "Navigate the globe to focus on a specific country. Use when the user mentions a country name.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "iso3": {
+        "type": "string",
+        "description": "ISO 3166-1 alpha-3 country code (e.g., SDN for Sudan, UKR for Ukraine, YEM for Yemen)"
+      }
+    },
+    "required": ["iso3"]
   }
-}, [highlightedCountries]);
+}
 ```
 
-**Voice command → action mapping:**
+**Tool 2: `filterByCrisis`**
 
-| Voice Input | Parsed Action |
+```json
+{
+  "name": "filterByCrisis",
+  "description": "Filter the globe visualization to show only a specific crisis sector/cluster.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "cluster": {
+        "type": "string",
+        "enum": ["Health", "Food Security", "WASH", "Protection", "Shelter", "Education", "Nutrition", "Early Recovery"],
+        "description": "The humanitarian cluster to filter by"
+      }
+    },
+    "required": ["cluster"]
+  }
+}
+```
+
+**Tool 3: `filterByYear`**
+
+```json
+{
+  "name": "filterByYear",
+  "description": "Change the year of data displayed on the globe.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "year": {
+        "type": "integer",
+        "description": "The year to display (2020-2025)"
+      }
+    },
+    "required": ["year"]
+  }
+}
+```
+
+### 5.4 Backend RAG Handler for Voice Questions
+
+When a user asks a question like *"Why did Sudan receive less funding than Ukraine?"*, the flow is:
+
+```
+User speaks → ElevenLabs Agent → calls /api/ask → 
+  Backend queries Databricks Vector Search → 
+  Retrieves relevant crisis summaries → 
+  Sends context + question to Databricks Foundation Model → 
+  Returns text answer → ElevenLabs speaks it
+```
+
+```python
+# backend/routers/ask.py
+from fastapi import APIRouter, Request
+from pydantic import BaseModel
+from ..services.databricks_client import vector_search, query_llm
+
+router = APIRouter()
+
+class AskRequest(BaseModel):
+    question: str
+
+@router.post("/ask")
+async def ask_question(req: AskRequest, request: Request):
+    context_docs = await vector_search(req.question, num_results=5)
+
+    context_text = "\n\n".join([doc[1] for doc in context_docs])
+
+    prompt = f"""You are a humanitarian crisis data analyst. Using the following data context,
+answer the user's question concisely and with specific numbers.
+
+CONTEXT:
+{context_text}
+
+QUESTION: {req.question}
+
+ANSWER:"""
+
+    answer = await query_llm(prompt)
+
+    return {
+        "question": req.question,
+        "answer": answer,
+        "sources": [doc[2] for doc in context_docs]
+    }
+```
+
+```python
+# backend/services/databricks_client.py (addition)
+
+async def query_llm(prompt: str) -> str:
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{DATABRICKS_HOST}/serving-endpoints/databricks-meta-llama-3-1-70b-instruct/invocations",
+            headers={"Authorization": f"Bearer {DATABRICKS_TOKEN}"},
+            json={
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 500
+            }
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+```
+
+### 5.5 Example Voice Interactions
+
+| User says | Agent action | Agent responds |
+|---|---|---|
+| "Show me Sudan" | Calls `navigateToCountry({ iso3: "SDN" })` | "Navigating to Sudan. Sudan has 24.8 million people in need with a mismatch score of 0.87." |
+| "Compare Sudan and Ukraine" | Calls `/api/compare?a=SDN&b=UKR` | "Sudan has 24.8M people in need receiving $33.87 per capita. Ukraine has 14.6M people in need receiving $186.30 per capita — a 5.5x difference." |
+| "Filter to Health sector" | Calls `filterByCrisis({ cluster: "Health" })` | "Now showing only Health sector data across all countries." |
+| "Why is Yemen underfunded?" | Calls `/api/ask` | "Yemen ranks 3rd in severity but 28th in funding per capita. Its HRP has been consistently underfunded by 40-60%, primarily due to..." |
+
+### 5.6 AI Integration Deliverables Checklist
+
+- [ ] ElevenLabs agent created with system prompt + voice
+- [ ] Three client tools configured (navigateToCountry, filterByCrisis, filterByYear)
+- [ ] React `VoiceAgent` component integrated into layout
+- [ ] `/api/ask` endpoint with Databricks Vector Search + LLM
+- [ ] Voice-driven globe navigation working end-to-end
+- [ ] Knowledge base uploaded with mismatch CSV
+
+---
+
+## 6. Data Flow Diagram
+
+```
+                    ┌──────────────┐     ┌──────────────┐
+                    │  HPC Tools   │     │   HDX HAPI   │
+                    │  API v1      │     │   API v2     │
+                    └──────┬───────┘     └──────┬───────┘
+                           │                    │
+              ┌────────────┴────────────────────┴────────────┐
+              │           DATABRICKS (Free Edition)          │
+              │                                              │
+              │  ┌─────────────┐  ┌────────────────────────┐ │
+              │  │ Delta Tables│  │  ML: Isolation Forest  │ │
+              │  │ plans       │  │  (project anomalies)   │ │
+              │  │ flows       │  └────────────────────────┘ │
+              │  │ needs       │                             │
+              │  │ population  │  ┌────────────────────────┐ │
+              │  └─────────────┘  │  Vector Search Index   │ │
+              │                   │  (RAG documents)       │ │
+              │  ┌─────────────┐  └────────────────────────┘ │
+              │  │ Computed    │                             │
+              │  │ mismatch    │  ┌────────────────────────┐ │
+              │  │ anomalies   │  │  Foundation Model API  │ │
+              │  │ benchmarks  │  │  (LLaMA 3.1 70B)      │ │
+              │  └─────────────┘  └────────────────────────┘ │
+              └──────────────────────┬───────────────────────┘
+                                     │
+                              ┌──────┴───────┐
+                              │   FastAPI    │
+                              │   Backend   │
+                              └──────┬───────┘
+                                     │
+              ┌──────────────────────┴───────────────────────┐
+              │              NEXT.JS FRONTEND                │
+              │                                              │
+              │  ┌─────────┐  ┌──────────┐  ┌────────────┐  │
+              │  │Globe.gl │  │ Filters  │  │ ElevenLabs │  │
+              │  │3D Globe │  │ & Panels │  │ Voice Agent│  │
+              │  └─────────┘  └──────────┘  └────────────┘  │
+              └──────────────────────────────────────────────┘
+```
+
+---
+
+## 7. API Reference Cheat Sheet
+
+### HPC Tools API v1
+
+**Base:** `https://api.hpc.tools/v1/public`
+
+| Call | URL |
 |---|---|
-| "Show me Sudan" | `pointOfView` to Sudan, open detail panel |
-| "Compare Sudan and Ukraine" | Highlight both, show comparison panel |
-| "Which countries are most underfunded?" | Filter to `mismatch_type=underfunded`, zoom out |
-| "Show health cluster funding" | Set cluster filter to Health, refresh globe |
-| "Why is Yemen underfunded?" | Agent calls `/voice-context`, speaks answer |
+| Plans by year | `GET /plan/year/2024` |
+| Plans by country | `GET /plan/country/SDN` |
+| Funding flows by year | `GET /fts/flow?year=2024&groupby=Country` |
+| Funding flows by country | `GET /fts/flow?countryISO3=SDN&year=2024` |
+| Projects in a plan | `GET /project/plan/{planId}` |
+| Emergencies by year | `GET /emergency/year/2024` |
+| All global clusters | `GET /global-cluster` |
+| All locations | `GET /location` |
 
----
+No authentication required. Rate-limited; use reasonable delays between bulk requests.
 
-## 4.5 AI Task Checklist
+### HDX HAPI v2
 
-| # | Task | Est. Time | Depends On |
-|---|---|---|---|
-| A1 | Create ElevenLabs agent + configure prompt | 1h | — |
-| A2 | Register `get_country_context` tool in agent | 0.5h | A1 |
-| A3 | Implement `/api/voice-context` FastAPI endpoint | 1.5h | B6 |
-| A4 | Build voice widget React component | 1.5h | F1 |
-| A5 | Wire voice events to globe navigation | 1.5h | F2, A4 |
-| A6 | Implement comparison mode (2-country view) | 1.5h | A5, F8 |
-| A7 | Test end-to-end voice flow | 1h | A3, A5 |
-| A8 | Prompt tuning + edge case handling | 1h | A7 |
+**Base:** `https://hapi.humdata.org/api/v2`
 
-**Total: ~9.5h**
+All requests require `app_identifier` query param (base64 of `"AppName:email"`).
 
----
-
-# Timeline — 36 Hours
-
-## Phase 1: Foundation (Hours 0–8)
-
-| Hour | Backend | Frontend | Data/ML | AI |
-|---|---|---|---|---|
-| 0–1 | B1: Scaffold FastAPI | F1: Scaffold Next.js | D1: Databricks setup | A1: ElevenLabs agent |
-| 1–3 | B2+B3+B4: API clients | F2: Globe + static data | D2: Ingest HPC plans | A2: Register tool |
-| 3–5 | B5: DB schema | F3: Heatmap layer | D3: Ingest HDX + CBPF | — |
-| 5–8 | B6: Ingestion pipeline | F4: Points layer | D4: Feature table | A4: Voice widget |
-
-## Phase 2: Integration (Hours 8–20)
-
-| Hour | Backend | Frontend | Data/ML | AI |
-|---|---|---|---|---|
-| 8–10 | B7: `/globe-data` endpoint | F5: Choropleth layer | D5: Isolation Forest | A3: Voice context EP |
-| 10–12 | B8: `/countries/{iso3}` | F7: Sidebar filters | D6: Cost outlier model | A5: Voice → globe |
-| 12–15 | B9: Mismatches + benchmarks | F8: Country detail panel | D7: Funding predictor | A6: Comparison mode |
-| 15–18 | B10: Voice context EP | F10: Live API hookup | D8: Export to Postgres | — |
-| 18–20 | B11: Deploy + CORS | F6: Arc layer | D9: Feature importance | A7: E2E test |
-
-## Phase 3: Polish (Hours 20–36)
-
-| Hour | All Hands |
+| Call | URL |
 |---|---|
-| 20–24 | F9: Benchmark panel, F11: Legend + tooltips, F13: Responsive polish |
-| 24–28 | A8: Prompt tuning, bug fixes, edge cases |
-| 28–32 | Full integration testing, demo rehearsal |
-| 32–36 | Presentation prep, final deployment, buffer |
+| Humanitarian needs | `GET /affected-people/humanitarian-needs?location_code=SDN&app_identifier=...` |
+| Baseline population | `GET /geography-infrastructure/baseline-population?app_identifier=...` |
+| IDPs | `GET /affected-people/idps?app_identifier=...` |
+| Refugees | `GET /affected-people/refugees-persons-of-concern?app_identifier=...` |
+| Locations metadata | `GET /metadata/location?app_identifier=...` |
+
+Generate app_identifier: `base64("AppName:email@domain.com")`
+
+### ElevenLabs
+
+**Package:** `@elevenlabs/react`
+**Hook:** `useConversation()`
+**Key methods:** `conversation.startSession({ agentId })`, `conversation.endSession()`
+**Client tools:** Defined in hook config, invoked by the agent during conversation
+
+### Databricks
+
+**Vector Search:** `POST {host}/api/2.0/vector-search/indexes/{index}/query`
+**Foundation Models:** `POST {host}/serving-endpoints/{model}/invocations`
+**SQL:** `POST {host}/api/2.0/sql/statements` (for querying Delta tables)
 
 ---
 
-# Appendix A: Environment Variables
+## 8. Databricks Free Edition Constraints
 
-```env
-# Backend (.env)
-DATABASE_URL=postgresql://haxlytics:password@localhost:5432/haxlytics
-HDX_APP_NAME=haxlytics
-HDX_EMAIL=team@haxlytics.dev
-ELEVENLABS_API_KEY=sk-...
-ELEVENLABS_AGENT_ID=agent_...
+These constraints shape architectural decisions throughout the project:
 
-# Frontend (.env.local)
-NEXT_PUBLIC_API_URL=https://your-vultr-server.com/api
-NEXT_PUBLIC_ELEVENLABS_AGENT_ID=agent_...
-```
+| Constraint | Impact | Mitigation |
+|---|---|---|
+| No GPU | Cannot use deep learning for embeddings | Use `databricks-bge-large-en` managed embedding endpoint (serverless) |
+| 1 Vector Search endpoint | Single RAG index only | Combine all crisis summaries into one index with metadata filtering |
+| Small cluster sizes | Limited data processing throughput | Pre-aggregate data; run notebooks sequentially, not in parallel |
+| 5 concurrent job tasks | Cannot parallelize heavily | Chain notebooks in sequence |
+| No R/Scala | Python only | All notebooks in PySpark + pandas |
+| 1 SQL warehouse (2X-Small) | Limited query concurrency | Cache query results in FastAPI; minimize live SQL calls |
+| 1 App (24h auto-stop) | Cannot host a persistent app | Host FastAPI externally; use Databricks only for data/ML |
+| Fair usage quota | Compute may shut down for rest of day if exceeded | Run data ingestion early; cache aggressively |
 
-# Appendix B: Key API Quick Reference
+---
 
-| API | Base URL | Auth | Rate Limit |
-|---|---|---|---|
-| HPC Tools v1 | `https://api.hpc.tools/v1/public` | None (open) | Hourly cap; email `ocha-hpc@un.org` for higher limits |
-| HDX HAPI v2 | `https://hapi.humdata.org/api/v2` | `app_identifier` param (base64 of `app:email`) | 10,000 rows default |
-| CBPF vo3 | `https://cbpfapi.unocha.org/vo3/odata` | None (open) | — |
-| FTS (alt) | `https://fts.unocha.org/api/v2` | None | — |
+## 9. 36-Hour Sprint Schedule
 
-# Appendix C: GeoJSON Source
+### Hours 0–4: Foundation
 
-Country boundaries for choropleth:
+| Who | Task |
+|---|---|
+| **Frontend** | Scaffold Next.js app, install dependencies, render basic globe with GeoJSON countries |
+| **Backend** | Scaffold FastAPI app, implement HPC + HDX clients, verify API calls return data |
+| **Data/ML** | Set up Databricks workspace, run Notebook 01 (data ingestion) |
+| **AI** | Create ElevenLabs agent in dashboard, configure system prompt and voice |
 
-```
-https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson
-```
+### Hours 4–10: Core Data Pipeline
 
-Centroid coordinates for each ISO3 country are available from the HDX HAPI `/metadata/location` endpoint.
+| Who | Task |
+|---|---|
+| **Frontend** | Implement choropleth layer with mock severity data, build side panel with filters |
+| **Backend** | Implement `/api/countries` and `/api/mismatch` endpoints with live data |
+| **Data/ML** | Run Notebook 02 (mismatch engine) + Notebook 03 (anomaly detection) |
+| **AI** | Define client tools in ElevenLabs dashboard, wire `VoiceAgent` component |
+
+### Hours 10–18: Integration
+
+| Who | Task |
+|---|---|
+| **Frontend** | Connect globe to live backend APIs, implement heatmap + points layers, build detail drawer |
+| **Backend** | Implement `/api/compare`, integrate Databricks client for mismatch data |
+| **Data/ML** | Run Notebook 04 (vectorization) + Notebook 05 (benchmarking), export mismatch CSV |
+| **AI** | Implement `/api/ask` with RAG pipeline, test voice → answer flow end-to-end |
+
+### Hours 18–28: Polish & Voice
+
+| Who | Task |
+|---|---|
+| **Frontend** | Voice-driven navigation working, country click → detail drawer animation, responsive layout |
+| **Backend** | Error handling, caching, performance optimization |
+| **Data/ML** | Validate mismatch scores against real-world examples (Yemen, Sudan vs Ukraine) |
+| **AI** | Upload knowledge base CSV, test all voice interaction scenarios from Section 5.5 |
+
+### Hours 28–36: Demo Prep
+
+| Who | Task |
+|---|---|
+| **All** | End-to-end testing, bug fixes |
+| **Frontend** | Final UI polish, loading states, error boundaries |
+| **Backend** | Deploy to cloud (or run locally for demo) |
+| **Data/ML** | Prepare 2-3 compelling data stories for demo (Yemen, Sudan/Ukraine, Health outliers) |
+| **AI** | Rehearse voice demo scenarios |
