@@ -434,73 +434,109 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 5: Pull Project Data for B2B Aggregates
-# MAGIC Fetch HPC projects for all plans 2022-2026, compute B2B ratios, aggregate per country-year.
+# MAGIC ## Step 5: Compute B2B from Funding + Targeted Beneficiaries
+# MAGIC The HPC project API does not expose beneficiary counts. Instead, derive
+# MAGIC Budget-to-Beneficiary (B2B) ratios from HDX HAPI data:
+# MAGIC - Numerator: `funding_usd` from Step 3 (HRP funding)
+# MAGIC - Denominator: targeted population from humanitarian needs (population_status=TGT)
 
 # COMMAND ----------
 
-plan_ids = plans_df[["plan_id", "year", "iso3"]].drop_duplicates()
-all_projects = []
+# Pull targeted beneficiaries (TGT) at national level from humanitarian needs
+all_tgt = []
+offset = 0
+PAGE = 10000
 
-for _, plan in plan_ids.iterrows():
-    pid = plan["plan_id"]
+while True:
+    print(f"Fetching targeted beneficiaries (offset={offset})...")
     try:
-        resp = requests.get(f"{HPC_BASE}/project/plan/{pid}", timeout=30)
-        if resp.ok:
-            for p in resp.json().get("data", []):
-                funds = p.get("currentRequestedFunds", 0) or 0
-                beneficiaries = p.get("targetBeneficiaries", 0) or 0
-                funds = float(funds) if funds else 0
-                beneficiaries = float(beneficiaries) if beneficiaries else 0
+        resp = requests.get(
+            f"{HDX_BASE}/affected-people/humanitarian-needs",
+            params={
+                "app_identifier": APP_ID,
+                "limit": PAGE,
+                "offset": offset,
+                "reference_period_start_min": "2022-01-01",
+                "population_status": "TGT",
+                "admin_level": 0,
+            },
+            timeout=60,
+        )
+        if not resp.ok:
+            print(f"  -> HTTP {resp.status_code}")
+            break
+        data = resp.json().get("data", [])
+        if not data:
+            print("  -> Done.")
+            break
+        all_tgt.extend(data)
+        print(f"  -> {len(data)} records (total: {len(all_tgt)})")
+        offset += PAGE
+    except Exception as e:
+        print(f"  -> Error: {e}")
+        break
+    time.sleep(0.3)
 
-                code = p.get("code", "") or ""
-                iso3 = code[1:4].upper() if len(code) >= 4 else (plan["iso3"] or "")
-
-                if funds > 0 and beneficiaries > 0:
-                    all_projects.append({
-                        "iso3": iso3,
-                        "year": plan["year"],
-                        "requested_funds": funds,
-                        "target_beneficiaries": beneficiaries,
-                    })
-    except Exception:
-        pass
-    time.sleep(0.2)
-
-projects_df = pd.DataFrame(all_projects) if all_projects else pd.DataFrame()
-print(f"Projects with valid B2B data: {len(projects_df)}")
+tgt_raw = pd.DataFrame(all_tgt) if all_tgt else pd.DataFrame()
+print(f"\nTotal TGT records: {len(tgt_raw)}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Aggregate B2B ratios per country-year
+# MAGIC ### Aggregate targeted beneficiaries and compute B2B per country-year
 
 # COMMAND ----------
 
-if len(projects_df) > 0:
-    projects_df["b2b_ratio"] = (
-        projects_df["target_beneficiaries"] / projects_df["requested_funds"]
+if len(tgt_raw) > 0 and len(hrp_agg) > 0:
+    tgt_raw["reference_period_start"] = pd.to_datetime(
+        tgt_raw["reference_period_start"], errors="coerce"
     )
+    tgt_raw["year"] = tgt_raw["reference_period_start"].dt.year.astype("Int64")
+    tgt_raw["population"] = pd.to_numeric(tgt_raw["population"], errors="coerce")
+    tgt_raw = tgt_raw[tgt_raw["year"].between(2022, 2026)].copy()
 
-    b2b_agg = (
-        projects_df.groupby(["iso3", "year"])
-        .agg(
-            avg_b2b_ratio=("b2b_ratio", "mean"),
-            median_b2b_ratio=("b2b_ratio", "median"),
-            project_count=("b2b_ratio", "count"),
-        )
+    # Use Intersectoral rows to get de-duplicated totals where available
+    if "sector_name" in tgt_raw.columns:
+        inter = tgt_raw[
+            tgt_raw["sector_name"].str.contains("Intersector", case=False, na=False)
+        ]
+        if len(inter) > 0:
+            tgt_raw = inter
+
+    # Aggregate: total targeted population per country-year
+    tgt_agg = (
+        tgt_raw.groupby(["location_code", "year"])
+        .agg(target_beneficiaries=("population", "sum"))
         .reset_index()
     )
+    tgt_agg = tgt_agg.rename(columns={"location_code": "iso3"})
+    tgt_agg["iso3"] = tgt_agg["iso3"].str.strip().str.upper()
 
-    # Global 25th percentile B2B — used for INEFFICIENT classification
-    global_b2b_p25 = projects_df["b2b_ratio"].quantile(0.25)
-    print(f"B2B aggregated: {len(b2b_agg)} country-year rows")
-    print(f"Global B2B 25th percentile: {global_b2b_p25:.4f}")
+    # Join with HRP funding to compute B2B
+    b2b_agg = hrp_agg[["iso3", "year", "funding_usd"]].merge(
+        tgt_agg[["iso3", "year", "target_beneficiaries"]],
+        on=["iso3", "year"],
+        how="inner",
+    )
+
+    # B2B = beneficiaries per dollar, cost per beneficiary = dollars per beneficiary
+    b2b_agg = b2b_agg[
+        (b2b_agg["funding_usd"] > 0) & (b2b_agg["target_beneficiaries"] > 0)
+    ].copy()
+    b2b_agg["avg_b2b_ratio"] = b2b_agg["target_beneficiaries"] / b2b_agg["funding_usd"]
+    b2b_agg["median_b2b_ratio"] = b2b_agg["avg_b2b_ratio"]  # one value per country-year
+    b2b_agg["project_count"] = 1  # placeholder -- derived from aggregate data
+
+    # Global 25th percentile B2B -- used for INEFFICIENT classification
+    global_b2b_p25 = b2b_agg["avg_b2b_ratio"].quantile(0.25)
+    print(f"B2B computed: {len(b2b_agg)} country-year rows")
+    print(f"Global B2B 25th percentile: {global_b2b_p25:.6f}")
 else:
     b2b_agg = pd.DataFrame(columns=[
         "iso3", "year", "avg_b2b_ratio", "median_b2b_ratio", "project_count"
     ])
     global_b2b_p25 = 0
+    print("Skipping B2B: no targeted beneficiary or funding data")
 
 # COMMAND ----------
 
