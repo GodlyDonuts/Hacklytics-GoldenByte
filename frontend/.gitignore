@@ -1,0 +1,7 @@
+# Dependencies
+node_modules/
+# Next.js
+.next/
+# Misc
+*.log
+.env*.local
