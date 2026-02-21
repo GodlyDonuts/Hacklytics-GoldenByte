@@ -103,9 +103,7 @@ export interface Crisis {
   people_in_need: number;
   funding_gap_usd: number;
   funding_coverage_pct: number;
-  avg_b2b_ratio: number;
-  median_b2b_ratio: number;
-  project_count: number;
+  b2b_ratio: number;
   crisis_rank: number;
 }
 
@@ -234,7 +232,7 @@ export interface GlobeB2BResponse {
   year: number;
   projects: B2BProject[];
   summary: {
-    avg_b2b: number | null;
+    weighted_b2b: number | null;
     median_b2b: number | null;
     total_projects: number;
     outlier_count: number;
