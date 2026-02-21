@@ -367,6 +367,7 @@ while True:
                 "limit": PAGE,
                 "offset": offset,
                 "reference_period_start_min": "2022-01-01",
+                "population_status": "INN",
             },
             timeout=60,
         )
@@ -523,17 +524,16 @@ if len(tgt_raw) > 0 and len(hrp_agg) > 0:
     b2b_agg = b2b_agg[
         (b2b_agg["funding_usd"] > 0) & (b2b_agg["target_beneficiaries"] > 0)
     ].copy()
-    b2b_agg["avg_b2b_ratio"] = b2b_agg["target_beneficiaries"] / b2b_agg["funding_usd"]
-    b2b_agg["median_b2b_ratio"] = b2b_agg["avg_b2b_ratio"]  # one value per country-year
+    b2b_agg["b2b_ratio"] = b2b_agg["target_beneficiaries"] / b2b_agg["funding_usd"]
     b2b_agg["project_count"] = 1  # placeholder -- derived from aggregate data
 
     # Global 25th percentile B2B -- used for INEFFICIENT classification
-    global_b2b_p25 = b2b_agg["avg_b2b_ratio"].quantile(0.25)
+    global_b2b_p25 = b2b_agg["b2b_ratio"].quantile(0.25)
     print(f"B2B computed: {len(b2b_agg)} country-year rows")
     print(f"Global B2B 25th percentile: {global_b2b_p25:.6f}")
 else:
     b2b_agg = pd.DataFrame(columns=[
-        "iso3", "year", "avg_b2b_ratio", "median_b2b_ratio", "project_count"
+        "iso3", "year", "b2b_ratio", "project_count"
     ])
     global_b2b_p25 = 0
     print("Skipping B2B: no targeted beneficiary or funding data")
@@ -567,14 +567,18 @@ result = result.merge(
 
 # Left join B2B aggregates on iso3 + year
 result = result.merge(
-    b2b_agg[["iso3", "year", "avg_b2b_ratio", "median_b2b_ratio", "project_count"]],
+    b2b_agg[["iso3", "year", "target_beneficiaries", "b2b_ratio", "project_count"]],
     on=["iso3", "year"],
     how="left",
 )
 
-# Fill NaN defaults
+# Fill NaN defaults -- no HRP means 0 funding, not unknown
 result["has_hrp"] = result["has_hrp"].fillna(False)
 result["project_count"] = result["project_count"].fillna(0).astype(int)
+for col in ["funding_usd", "requirements_usd", "funding_gap_usd",
+            "funding_coverage_pct", "target_beneficiaries", "b2b_ratio"]:
+    if col in result.columns:
+        result[col] = result[col].fillna(0)
 
 print(f"Joined result: {len(result)} rows")
 print(f"Countries: {result['iso3'].nunique()}")
@@ -593,14 +597,28 @@ def classify_funding_state(row):
     coverage = row.get("funding_coverage_pct")
     if pd.isna(coverage) or coverage < 0.50:
         return "UNDERFUNDED"
-    median_b2b = row.get("median_b2b_ratio")
-    if pd.notna(median_b2b) and global_b2b_p25 > 0 and median_b2b < global_b2b_p25:
+    b2b = row.get("b2b_ratio")
+    if pd.notna(b2b) and global_b2b_p25 > 0 and b2b < global_b2b_p25:
         return "INEFFICIENT"
     return "ADEQUATE"
 
 result["funding_state"] = result.apply(classify_funding_state, axis=1)
 
+# Coverage ratio: what fraction of people in need are targeted by HRP projects
+# Clipped to [0, 1]; NO_HRP crises get 0 (no coverage at all)
+result["coverage_ratio"] = np.where(
+    result["people_in_need"] > 0,
+    (result["target_beneficiaries"] / result["people_in_need"]).clip(0, 1),
+    0.0,
+)
+
+# Oversight score: severity * (1 - coverage_ratio)
+# High severity + low coverage = most overlooked (scale 0-5)
+# NO_HRP crises get coverage_ratio=0, so oversight_score = raw severity
+result["oversight_score"] = result["acaps_severity"] * (1 - result["coverage_ratio"])
+
 print(f"Funding state distribution:\n{result['funding_state'].value_counts()}")
+print(f"\nOversight score stats:\n{result['oversight_score'].describe()}")
 
 # COMMAND ----------
 
@@ -684,9 +702,10 @@ output_columns = [
     "year", "month", "year_month",
     "crisis_id", "crisis_name", "acaps_severity", "severity_class",
     "has_hrp", "appeal_type", "appeal_code", "funding_state",
-    "people_in_need", "requirements_usd", "funding_usd",
+    "people_in_need", "target_beneficiaries", "requirements_usd", "funding_usd",
     "funding_gap_usd", "funding_coverage_pct",
-    "avg_b2b_ratio", "median_b2b_ratio", "project_count",
+    "coverage_ratio", "oversight_score",
+    "b2b_ratio", "project_count",
     "crisis_rank",
 ]
 
