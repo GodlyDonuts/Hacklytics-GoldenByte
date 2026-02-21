@@ -5,35 +5,28 @@ import Globe, { GlobeInstance } from "globe.gl";
 import GlobeControls from "./GlobeControls";
 import { useGlobeContext } from "@/context/GlobeContext";
 
-type MismatchPoint = {
-  lat: number;
-  lng: number;
-  mismatch_score: number;
-  people_in_need: number;
-  iso3: string;
-};
 
-// Mock data for testing without backend
-const MOCK_DATA: MismatchPoint[] = [
-  { lat: 15.5, lng: 32.5, mismatch_score: 0.1, people_in_need: 15_000_000, iso3: "SDN" },
-  { lat: 15.3, lng: 44.2, mismatch_score: 0.72, people_in_need: 21_000_000, iso3: "YEM" },
-  { lat: 36.1, lng: 43.9, mismatch_score: 0.65, people_in_need: 12_000_000, iso3: "IRQ" },
-  { lat: 33.9, lng: 35.5, mismatch_score: 0.58, people_in_need: 2_500_000, iso3: "LBN" },
-  { lat: 34.8, lng: 38.9, mismatch_score: 0.91, people_in_need: 14_000_000, iso3: "SYR" },
-  { lat: 4.6, lng: 33.5, mismatch_score: 0.45, people_in_need: 9_000_000, iso3: "SSD" },
-  { lat: 34.0, lng: 66.0, mismatch_score: 0.78, people_in_need: 28_000_000, iso3: "AFG" },
-  { lat: 6.5, lng: 3.4, mismatch_score: 0.35, people_in_need: 3_000_000, iso3: "NGA" },
-  { lat: -1.3, lng: 36.8, mismatch_score: 0.52, people_in_need: 5_500_000, iso3: "KEN" },
-  { lat: 12.8, lng: 45.0, mismatch_score: 0.68, people_in_need: 4_000_000, iso3: "SOM" },
-];
+import { getGlobeCrises, GlobeCountry } from "@/lib/api";
 
 export default function GlobeView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
-  const [selectedPoint, setSelectedPoint] = useState<MismatchPoint | null>(null);
-  const { selectedCountry, setSelectedCountry, flyToCoordinates, comparisonData, viewMode } = useGlobeContext();
+  const [selectedPoint, setSelectedPoint] = useState<GlobeCountry | null>(null);
+  const { selectedCountry, setSelectedCountry, flyToCoordinates, comparisonData, viewMode, filters } = useGlobeContext();
+  const [data, setData] = useState<GlobeCountry[]>([]);
 
-  const data = useMemo(() => MOCK_DATA, []);
+  useEffect(() => {
+    // Only fetch if a year filter exists
+    if (!filters.year) return;
+
+    getGlobeCrises(filters.year)
+      .then((res) => {
+        if (res && res.countries) {
+          setData(res.countries);
+        }
+      })
+      .catch((err) => console.error("Failed to load globe crises data:", err));
+  }, [filters.year]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -50,19 +43,39 @@ export default function GlobeView() {
   }, []);
 
   const heatmapData = useMemo(() => {
-    return [data.map((d) => {
-      let weight = d.mismatch_score;
+    return [data.map((country) => {
+      // Aggregate crisis data for the country to get a single weight
+      let weight = 0;
+
+      let totalSeverity = 0;
+      let totalFundingGap = 0;
+      let totalPeopleInNeed = 0;
+      let count = 0;
+
+      country.crises?.forEach(crisis => {
+        totalSeverity += crisis.acaps_severity || 0;
+        totalFundingGap += crisis.funding_gap_usd || 0;
+        totalPeopleInNeed += crisis.people_in_need || 0;
+        count += 1;
+      });
+
+      if (count === 0) return { lat: country.lat, lng: country.lng, weight: 0, iso: country.iso3 };
+
       if (viewMode === 'severity') {
-        // Normalize severity (people in need) to a max to get a 0-1 scale
-        weight = d.people_in_need / 30_000_000;
+        // Map total people in need to 0-1 scale, capped at 30M for visual max
+        weight = Math.min(totalPeopleInNeed / 30_000_000, 1.0);
       } else if (viewMode === 'funding-gap') {
-        // We use an arbitrary mock calculation for gap
-        weight = Math.max(0.1, d.mismatch_score - 0.2);
+        // Map funding gap USD to 0-1 scale, capped at $1B for visual max
+        weight = Math.min(totalFundingGap / 1_000_000_000, 1.0);
       } else if (viewMode === 'anomalies') {
-        // Anomalies mode just emphasizes strictly the highest mismatch points
-        weight = d.mismatch_score > 0.6 ? d.mismatch_score : 0;
+        // Placeholder anomalies metric: e.g. High avg B2B ratio
+        let sumB2B = 0;
+        country.crises?.forEach(c => sumB2B += c.avg_b2b_ratio || 0);
+        let avgB2B = count > 0 ? sumB2B / count : 0;
+        weight = Math.min(avgB2B / 100, 1.0); // Assuming ratio as percentage up to 100
       }
-      return { lat: d.lat, lng: d.lng, weight };
+
+      return { lat: country.lat, lng: country.lng, weight, iso: country.iso3 };
     })];
   }, [data, viewMode]);
 
@@ -92,25 +105,30 @@ export default function GlobeView() {
       .enablePointerInteraction(true)
       .onHeatmapClick((_heatmap, _event, coords) => {
         const p = nearestPoint(data, coords.lat, coords.lng);
-        setSelectedCountry(p.iso3);
-        setSelectedPoint(p);
+        if (p && p.iso3) {
+          setSelectedCountry(p.iso3);
+          setSelectedPoint(p);
+        }
       });
 
     globe
       .htmlElementsData(selectedPoint ? [selectedPoint] : [])
-      .htmlLat((o) => (o as MismatchPoint).lat)
-      .htmlLng((o) => (o as MismatchPoint).lng)
-      .htmlAltitude((o) => (o as MismatchPoint).mismatch_score)
+      .htmlLat((o) => (o as GlobeCountry).lat || 0)
+      .htmlLng((o) => (o as GlobeCountry).lng || 0)
+      .htmlAltitude(0.2) // Fixed altitude or calculate based on aggregated severity
       .htmlElement((obj) => {
-        const p = obj as MismatchPoint;
+        const country = obj as GlobeCountry;
+
+        let targetCrisis = country.crises && country.crises.length > 0 ? country.crises[0] : null;
+        let pin = targetCrisis ? (targetCrisis.people_in_need / 1_000_000) : 0;
+        let pinDisplay = pin > 0 ? `${pin.toFixed(1)}M` : 'Unknown';
+
         const el = document.createElement("div");
         el.className = "point-label";
         el.innerHTML = `
-          <div><strong>${p.iso3}</strong></div>
-          <div>lat: ${p.lat.toFixed(4)}</div>
-          <div>lng: ${p.lng.toFixed(4)}</div>
-          <div>mismatch: ${p.mismatch_score.toFixed(3)}</div>
-          <div>people in need: ${(p.people_in_need / 1_000_000).toFixed(1)}M</div>
+          <div><strong>${country.country_name} (${country.iso3})</strong></div>
+          <div>Crises: ${country.crises?.length || 0}</div>
+          <div>People in Need: ${pinDisplay}</div>
         `;
         return el;
       })
@@ -172,14 +190,17 @@ export default function GlobeView() {
   );
 }
 
-function nearestPoint(data: MismatchPoint[], lat: number, lng: number): MismatchPoint {
+function nearestPoint(data: GlobeCountry[], lat: number, lng: number): GlobeCountry {
+  if (data.length === 0) return {} as GlobeCountry;
   let best = data[0];
   let bestD = Infinity;
-  for (const p of data) {
-    const d = (p.lat - lat) ** 2 + (p.lng - lng) ** 2;
+  for (const country of data) {
+    const plat = country.lat || 0;
+    const plng = country.lng || 0;
+    const d = (plat - lat) ** 2 + (plng - lng) ** 2;
     if (d < bestD) {
       bestD = d;
-      best = p;
+      best = country;
     }
   }
   return best;
