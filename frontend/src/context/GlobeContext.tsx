@@ -4,7 +4,14 @@ import React, { createContext, useContext, useState, useCallback, ReactNode } fr
 
 export interface GlobeState {
   selectedCountry: string | null;
-  filters: { year: number; cluster: string | null };
+  filters: {
+    year: number;
+    month: number;
+    country: string | null;
+    crisis: string | null;
+    funds: string | null;
+    cluster: string | null;
+  };
   viewMode: 'severity' | 'funding-gap' | 'anomalies';
   layersVisible: { choropleth: boolean; heatmap: boolean; points: boolean };
   flyToCoordinates: { lat: number; lng: number; altitude?: number } | null;
@@ -28,7 +35,14 @@ type GlobeContextValue = GlobeState & {
 
 const defaultState: GlobeState = {
   selectedCountry: null,
-  filters: { year: new Date().getFullYear(), cluster: null },
+  filters: {
+    year: new Date().getFullYear(),
+    month: new Date().getMonth() + 1,
+    country: null,
+    crisis: null,
+    funds: null,
+    cluster: null,
+  },
   viewMode: 'severity',
   layersVisible: { choropleth: true, heatmap: true, points: true },
   flyToCoordinates: null,

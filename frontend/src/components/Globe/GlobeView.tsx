@@ -3,6 +3,7 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import Globe, { GlobeInstance } from "globe.gl";
 import GlobeControls from "./GlobeControls";
+import DataFiltersModal from "./DataFiltersModal";
 import { useGlobeContext } from "@/context/GlobeContext";
 
 type MismatchPoint = {
@@ -31,6 +32,7 @@ export default function GlobeView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
   const [selectedPoint, setSelectedPoint] = useState<MismatchPoint | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const { selectedCountry, setSelectedCountry, flyToCoordinates, comparisonData, viewMode } = useGlobeContext();
 
   const data = useMemo(() => MOCK_DATA, []);
@@ -168,6 +170,10 @@ export default function GlobeView() {
         </div>
       )}
       <GlobeControls globeRef={globeRef} />
+      <DataFiltersModal
+        open={filtersOpen}
+        onToggle={() => setFiltersOpen((o) => !o)}
+      />
     </div>
   );
 }

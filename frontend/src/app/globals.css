@@ -272,3 +272,9 @@ body {
 .point-label div {
   line-height: 1.35;
 }
+
+/* Data filters modal — technical dark theme */
+.data-filters-modal select.data-filters-select option {
+  background: #1e2023;
+  color: #00e5ff;
+}

@@ -1,15 +1,26 @@
 "use client";
 
 import { useConversation } from "@elevenlabs/react";
-import { useCallback, useState, useEffect } from "react";
+import { useCallback, useState, useEffect, useRef } from "react";
 import { useGlobeContext } from "@/context/GlobeContext";
 
 const AGENT_ID = process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID || "agent_1201khzd23t9fsaramppkhnftan0";
 
+/** For testing: send text to the agent from the console, e.g. sendAgentText("Show me Afghanistan") */
+declare global {
+    interface Window {
+        sendAgentText?: (text: string) => void;
+    }
+}
+
 export function VoiceAgent() {
     const [isSpacePressed, setIsSpacePressed] = useState(false);
     const [hasStarted, setHasStarted] = useState(false);
+    const [textPanelOpen, setTextPanelOpen] = useState(false);
+    const [textInput, setTextInput] = useState("");
+    const [textError, setTextError] = useState<string | null>(null);
     const { setFlyToCoordinates, setComparisonData, setViewMode } = useGlobeContext();
+    const conversationRef = useRef<ReturnType<typeof useConversation> | null>(null);
 
     // We pass micMuted dynamic state directly to the hook
     const conversation = useConversation({
@@ -71,6 +82,8 @@ export function VoiceAgent() {
         }
     });
 
+    conversationRef.current = conversation;
+
     useEffect(() => {
         if (!hasStarted && conversation.status === "connected") {
             conversation.endSession();
@@ -87,6 +100,51 @@ export function VoiceAgent() {
             console.error("Failed to start ElevenLabs session", err);
         }
     }, [conversation]);
+
+    /** Start session without requesting mic — for text-only testing. May still require mic on some agents. */
+    const startSessionForText = useCallback(async () => {
+        try {
+            if (conversation.status === "connected" || conversation.status === "connecting") return true;
+            await conversation.startSession({ agentId: AGENT_ID, connectionType: "websocket" });
+            setHasStarted(true);
+            return true;
+        } catch (err) {
+            console.error("Failed to start session for text", err);
+            return false;
+        }
+    }, [conversation]);
+
+    const sendTextToAgent = useCallback(async (text: string) => {
+        setTextError(null);
+        const t = text.trim();
+        if (!t) return;
+        try {
+            if (conversation.status !== "connected") {
+                const started = await startSessionForText();
+                if (!started) {
+                    setTextError("Could not connect. Try holding Space and allowing the microphone once, then use this again.");
+                    return;
+                }
+            }
+            conversation.sendUserMessage(t);
+            setTextInput("");
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            setTextError(msg);
+            console.error("sendUserMessage failed", err);
+        }
+    }, [conversation, startSessionForText]);
+
+    // Expose text send for console testing: sendAgentText("Show me Afghanistan")
+    useEffect(() => {
+        window.sendAgentText = (text: string) => {
+            if (conversationRef.current) sendTextToAgent(text);
+            else console.warn("VoiceAgent not ready yet.");
+        };
+        return () => {
+            delete window.sendAgentText;
+        };
+    }, [sendTextToAgent]);
 
     // Handle Spacebar interactions globally
     useEffect(() => {
@@ -154,6 +212,60 @@ export function VoiceAgent() {
                     <div className="pulse-soft absolute -bottom-[10vh] left-[40%] w-[20vw] h-[15vh] bg-blue-400 rounded-full mix-blend-screen blur-[120px]" />
                 </div>
             )}
+
+            {/* Text test panel — same as voice but type instead of talk */}
+            <div className="fixed top-4 right-4 z-50 flex flex-col items-end gap-1">
+                {!textPanelOpen ? (
+                    <button
+                        type="button"
+                        onClick={() => setTextPanelOpen(true)}
+                        className="rounded-lg bg-black/60 px-3 py-2 text-xs font-medium text-white ring-1 ring-white/20 hover:bg-black/80"
+                        title="Send text to agent (testing)"
+                    >
+                        Text test
+                    </button>
+                ) : (
+                    <div className="w-72 rounded-lg bg-black/80 p-3 ring-1 ring-white/20 shadow-xl">
+                        <div className="mb-2 flex items-center justify-between">
+                            <span className="text-xs font-medium text-white/90">Send text to agent</span>
+                            <button
+                                type="button"
+                                onClick={() => setTextPanelOpen(false)}
+                                className="text-white/60 hover:text-white"
+                                aria-label="Close"
+                            >
+                                ×
+                            </button>
+                        </div>
+                        <textarea
+                            value={textInput}
+                            onChange={(e) => setTextInput(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter" && !e.shiftKey) {
+                                    e.preventDefault();
+                                    sendTextToAgent(textInput);
+                                }
+                            }}
+                            placeholder="e.g. Show me Afghanistan"
+                            rows={2}
+                            className="mb-2 w-full resize-none rounded border border-white/20 bg-white/5 px-2 py-1.5 text-sm text-white placeholder:text-white/40 focus:border-cyan-400 focus:outline-none"
+                        />
+                        {textError && (
+                            <p className="mb-2 text-xs text-amber-400">{textError}</p>
+                        )}
+                        <button
+                            type="button"
+                            onClick={() => sendTextToAgent(textInput)}
+                            className="w-full rounded bg-cyan-600 py-1.5 text-sm font-medium text-white hover:bg-cyan-500"
+                        >
+                            Send
+                        </button>
+                        <p className="mt-2 text-[10px] text-white/50">
+                            Console: sendAgentText(&quot;your message&quot;)
+                        </p>
+                    </div>
+                )}
+            </div>
         </>
     );
 }
