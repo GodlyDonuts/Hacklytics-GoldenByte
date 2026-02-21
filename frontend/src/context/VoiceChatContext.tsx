@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react';
 import { useConversation } from '@elevenlabs/react';
 import { useGlobeContext } from '@/context/GlobeContext';
+import { generateReport } from '@/lib/api';
 
 const AGENT_ID = process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID || 'agent_1201khzd23t9fsaramppkhnftan0';
 
@@ -31,8 +32,13 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
   const [hasStarted, setHasStarted] = useState(false);
   const [textInput, setTextInput] = useState('');
   const [textError, setTextError] = useState<string | null>(null);
-  const { setFlyToCoordinates, setComparisonData, setViewMode, setGenieChartData } = useGlobeContext();
+  const { setFlyToCoordinates, setComparisonData, setViewMode, setGenieChartData, setSelectedCountry, selectedCountry, comparisonData } = useGlobeContext();
   const conversationRef = useRef<ReturnType<typeof useConversation> | null>(null);
+
+  const globeStateRef = useRef({ selectedCountry, comparisonData });
+  useEffect(() => {
+    globeStateRef.current = { selectedCountry, comparisonData };
+  }, [selectedCountry, comparisonData]);
 
   const conversation = useConversation({
     onConnect: () => console.log('VoiceAgent connected'),
@@ -44,6 +50,7 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
     micMuted: !isSpacePressed,
     clientTools: {
       show_location_on_globe: (parameters: { lat: number; lng: number }) => {
+        console.log('AI called show_location_on_globe:', parameters);
         setFlyToCoordinates({
           lat: parameters.lat,
           lng: parameters.lng,
@@ -52,6 +59,7 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
         return 'Successfully moved the globe.';
       },
       change_view_mode: (parameters: { mode: 'severity' | 'funding-gap' | 'anomalies' }) => {
+        console.log('AI called change_view_mode:', parameters);
         setViewMode(parameters.mode);
         return `Successfully changed the view mode to ${parameters.mode}.`;
       },
@@ -65,6 +73,7 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
         sourceStats: { mismatch: number; peopleInNeed: number; risk: number; severity: number; gap: number };
         targetStats: { mismatch: number; peopleInNeed: number; risk: number; severity: number; gap: number };
       }) => {
+        console.log('AI called compare_countries:', parameters);
         setFlyToCoordinates({
           lat: parameters.sourceLat,
           lng: parameters.sourceLng,
@@ -83,6 +92,7 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
         return 'Successfully compared the countries. The user can now see the visualization.';
       },
       query_data: async (parameters: { question: string }) => {
+        console.log('AI called query_data:', parameters);
         try {
           const resp = await fetch(
             `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/genie`,
@@ -106,7 +116,39 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
           return `Query failed: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
+      generate_report: async (parameters: { scope?: 'global' | 'country'; iso3?: string }) => {
+        console.log('AI called generate_report:', parameters);
+        let scope = parameters.scope ?? 'global';
+        let iso3 = parameters.iso3;
+
+        if (!iso3) {
+          const currentSelected = globeStateRef.current.selectedCountry;
+          const currentComparison = globeStateRef.current.comparisonData;
+
+          if (currentSelected) {
+            iso3 = currentSelected;
+            scope = 'country';
+          } else if (currentComparison) {
+            iso3 = currentComparison.sourceIso;
+            scope = 'country';
+          }
+        }
+
+        generateReport(scope as 'global' | 'country', iso3)
+          .catch((err) => console.error('Report generation failed:', err));
+        return `Generating a ${scope} PDF report now. It will download automatically in a moment.`;
+      },
+      reset_view: (parameters: {}) => {
+        console.log('AI called reset_view:', parameters);
+        setViewMode('severity');
+        setComparisonData(null);
+        setGenieChartData(null);
+        setSelectedCountry(null);
+        setFlyToCoordinates({ lat: 20, lng: 0, altitude: 2.5 });
+        return 'Successfully reset the globe view to default.';
+      },
       end_conversation: () => {
+        console.log('AI called end_conversation');
         setHasStarted(false);
         return 'Conversation ended.';
       },
