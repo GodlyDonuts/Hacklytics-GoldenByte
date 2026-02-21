@@ -14,6 +14,7 @@
 
 # COMMAND ----------
 
+import re
 import requests
 import pandas as pd
 import numpy as np
@@ -35,6 +36,24 @@ HPC_BASE = "https://api.hpc.tools/v1/public"
 plan_rows = spark.table("workspace.default.plans").select("id", "year", "name").collect()
 print(f"Fetching projects for {len(plan_rows)} plans...")
 
+# Build plan_id -> country name lookup from plan names.
+# HRP plan names typically start with the country (e.g. "Sudan 2023").
+# Also build a lookup from the country_mismatch table for ISO3 -> country name.
+iso3_to_country = {}
+try:
+    cm_rows = spark.table("workspace.default.country_mismatch").select("iso3", "country").collect()
+    iso3_to_country = {r["iso3"]: r["country"] for r in cm_rows}
+except Exception:
+    pass
+
+plan_name_to_country = {}
+for r in plan_rows:
+    plan_name = r["name"] or ""
+    # Extract country: take text before the first year (4-digit number)
+    match = re.match(r"^(.+?)\s*\d{4}", plan_name)
+    country = match.group(1).strip().rstrip(" -:") if match else plan_name
+    plan_name_to_country[r["id"]] = country
+
 all_projects = []
 for i, row in enumerate(plan_rows):
     plan_id = row["id"]
@@ -45,18 +64,20 @@ for i, row in enumerate(plan_rows):
         if resp.ok:
             projects = resp.json().get("data", [])
             for p in projects:
-                locations = p.get("locations", [])
                 clusters = p.get("globalClusters", [])
+                code = p.get("code", "") or ""
+                # HPC project codes encode ISO3: [H|R]{ISO3}{YY}-...
+                iso3 = code[1:4].upper() if len(code) >= 4 else ""
                 all_projects.append({
-                    "projectCode": p.get("code", ""),
+                    "projectCode": code,
                     "projectName": (p.get("name", "") or "")[:200],
                     "planId": plan_id,
                     "planYear": row["year"],
                     "budget": p.get("currentRequestedFunds", 0) or 0,
                     "origBudget": p.get("origRequestedFunds", 0) or 0,
                     "cluster": clusters[0].get("name", "Unknown") if clusters else "Unknown",
-                    "countryISO3": locations[0].get("iso3", "") if locations else "",
-                    "countryName": locations[0].get("name", "") if locations else "",
+                    "countryISO3": iso3,
+                    "countryName": plan_name_to_country.get(plan_id, ""),
                 })
             print(f"    -> {len(projects)} projects")
         else:

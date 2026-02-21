@@ -1,5 +1,6 @@
 # Databricks notebook source
 
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -21,7 +22,7 @@ import time
 
 HPC_BASE = "https://api.hpc.tools/v1/public"
 HDX_BASE = "https://hapi.humdata.org/api/v2"
-APP_ID = base64.b64encode(b"CrisisTopography:team@hacklytics.org").decode()
+APP_ID = base64.b64encode(b"CrisisTopography:pa636132@ucf.edu").decode()
 
 # COMMAND ----------
 
@@ -186,6 +187,7 @@ while True:
             "limit": PAGE,
             "offset": offset,
             "reference_period_start_min": "2020-01-01",
+            "admin_level": 0,  # Country-level totals only; avoids loading millions of admin1/admin2 x gender x age rows
         },
         timeout=60,
     )

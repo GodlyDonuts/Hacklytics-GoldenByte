@@ -24,15 +24,46 @@ from pyspark.sql.window import Window
 
 needs = spark.table("workspace.default.humanitarian_needs")
 
-# Aggregate: total people in need per country
-# population_status "INN" = In Need
-severity = needs.filter(
-    F.col("population_status") == "INN"
-).groupBy("location_code", "location_name").agg(
+# Filter to de-duplicated cross-sector totals only.
+# "Intersectoral" is HDX HAPI's de-duplicated total -- summing individual sectors
+# (Food Security + Health + ...) would count the same people multiple times.
+needs_filtered = needs.filter(
+    (F.col("population_status") == "INN") &
+    (F.col("sector_code") == "Intersectoral")
+)
+
+# Keep only the latest reference period per country to avoid summing across years
+latest_period = needs_filtered.groupBy("location_code").agg(
+    F.max("reference_period_start").alias("max_ref_period")
+)
+needs_filtered = needs_filtered.join(latest_period, on="location_code").filter(
+    F.col("reference_period_start") == F.col("max_ref_period")
+).drop("max_ref_period")
+
+# Prefer the lowest admin_level per country (admin_level 0 = national aggregate).
+# If only sub-national data exists, sum across the finest level available.
+min_admin = needs_filtered.groupBy("location_code").agg(
+    F.min("admin_level").alias("target_admin_level")
+)
+needs_filtered = needs_filtered.join(min_admin, on="location_code").filter(
+    F.col("admin_level") == F.col("target_admin_level")
+).drop("target_admin_level")
+
+# Aggregate: total people in need per country (sum across categories/age groups)
+severity = needs_filtered.groupBy("location_code", "location_name").agg(
     F.sum("population").alias("people_in_need"),
-    F.countDistinct("sector_code").alias("sector_count"),
     F.max("reference_period_start").alias("latest_period")
 )
+
+# Count distinct active sectors per country from the full (non-Intersectoral) data
+# for downstream use in RAG document generation
+sector_counts = needs.filter(
+    (F.col("population_status") == "INN") &
+    (F.col("sector_code") != "Intersectoral")
+).groupBy("location_code").agg(
+    F.countDistinct("sector_code").alias("sector_count")
+)
+severity = severity.join(sector_counts, on="location_code", how="left")
 
 print(f"Countries with severity data: {severity.count()}")
 severity.orderBy(F.desc("people_in_need")).show(10, truncate=False)
@@ -46,9 +77,22 @@ severity.orderBy(F.desc("people_in_need")).show(10, truncate=False)
 
 funding = spark.table("workspace.default.funding")
 
-# Aggregate funding per country across all appeals
-# HDX HAPI funding table has location_code (ISO3), requirements_usd, funding_usd
-funding_agg = funding.groupBy("location_code", "location_name").agg(
+# Use only the latest plausible reference period year to match the severity data window.
+# Without this filter, funding sums span 2020-2026 producing cumulative multi-year totals.
+# Cap at current year to ignore malformed future-dated records from the API.
+import datetime
+current_year = datetime.date.today().year
+
+funding_latest = funding.withColumn(
+    "ref_year", F.year("reference_period_start")
+).filter(F.col("ref_year") <= current_year)
+
+max_year = funding_latest.agg(F.max("ref_year")).collect()[0][0]
+funding_latest = funding_latest.filter(F.col("ref_year") == max_year).drop("ref_year")
+print(f"Using funding data for year: {max_year}")
+
+# Aggregate funding per country across all appeals within the latest year
+funding_agg = funding_latest.groupBy("location_code", "location_name").agg(
     F.sum("funding_usd").alias("total_funding"),
     F.sum("requirements_usd").alias("total_requirements"),
     F.avg("funding_pct").alias("avg_funding_pct"),

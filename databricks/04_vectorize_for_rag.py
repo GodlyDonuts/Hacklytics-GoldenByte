@@ -1,7 +1,4 @@
 # Databricks notebook source
-
-# COMMAND ----------
-
 # MAGIC %md
 # MAGIC # 04 - Vectorize Crisis Summaries for RAG
 # MAGIC Creates text documents from mismatch data, stores them in a Delta table,
@@ -92,6 +89,12 @@ print(f"Wrote {docs_sdf.count()} rows to workspace.default.rag_documents")
 # COMMAND ----------
 
 vsc = VectorSearchClient()
+vsc.delete_index("crisis-rag-endpoint", "workspace.default.rag_index")
+print("Deleted old index")
+
+# COMMAND ----------
+
+vsc = VectorSearchClient()
 
 # Create the endpoint (skip if already exists)
 try:
@@ -157,3 +160,17 @@ try:
 except Exception as e:
     print(f"Index may still be syncing. Error: {e}")
     print("Try running this cell again in a few minutes.")
+
+# COMMAND ----------
+
+vsc = VectorSearchClient(disable_notice=True)
+
+# Check endpoint status
+endpoint = vsc.get_endpoint("crisis-rag-endpoint")
+print(f"Endpoint status: {endpoint}")
+# Check index status
+try:
+    index = vsc.get_index("crisis-rag-endpoint", "workspace.default.rag_index")
+    print(f"Index status: {index.describe()}")
+except Exception as e:
+    print(f"Index error: {e}")
