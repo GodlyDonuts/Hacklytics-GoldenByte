@@ -78,7 +78,7 @@ async def _poll_message(
     interval: float = 1.5,
     timeout: float = 30.0,
 ) -> dict:
-    """Poll until message reaches a terminal state. Returns the message payload."""
+    """Poll until message reaches COMPLETED with attachments."""
     url = f"{_genie_base_url()}/conversations/{conversation_id}/messages/{message_id}"
     elapsed = 0.0
     while elapsed < timeout:
@@ -86,10 +86,8 @@ async def _poll_message(
         resp.raise_for_status()
         data = resp.json()
         status = data.get("status", "")
-        if status in ("COMPLETED", "EXECUTING_QUERY"):
-            # EXECUTING_QUERY with attachments means the query ran
-            if status == "COMPLETED" or data.get("attachments"):
-                return data
+        if status == "COMPLETED" and data.get("attachments"):
+            return data
         if status in ("FAILED", "CANCELLED"):
             error_msg = data.get("error", "Genie query failed")
             raise RuntimeError(str(error_msg))
@@ -129,18 +127,18 @@ async def query_genie(req: GenieRequest) -> GenieResponse:
             attachment_id = None
 
             for att in attachments:
-                if att.get("type") == "QUERY":
-                    attachment_id = att.get("id")
-                    query_info = att.get("query", {})
+                if "query" in att:
+                    attachment_id = att.get("attachment_id")
+                    query_info = att["query"]
                     sql = query_info.get("query")
                     description = query_info.get("description")
                     break
 
-            # Also check for text description in message
+            # Also check for text description in attachments
             if not description:
                 for att in attachments:
-                    if att.get("type") == "TEXT":
-                        description = att.get("text", {}).get("content")
+                    if "text" in att:
+                        description = att["text"].get("content")
                         break
 
             columns: list[GenieColumn] = []
