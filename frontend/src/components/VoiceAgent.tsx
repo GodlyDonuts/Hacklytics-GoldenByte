@@ -1,0 +1,104 @@
+"use client";
+
+import { useConversation } from "@elevenlabs/react";
+import { useCallback, useState, useEffect } from "react";
+
+const AGENT_ID = process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID || "agent_1201khzd23t9fsaramppkhnftan0";
+
+export function VoiceAgent() {
+    const [isSpacePressed, setIsSpacePressed] = useState(false);
+    const [hasStarted, setHasStarted] = useState(false);
+
+    // We pass micMuted dynamic state directly to the hook
+    const conversation = useConversation({
+        onConnect: () => {
+            console.log("VoiceAgent connected");
+        },
+        onDisconnect: () => {
+            console.log("VoiceAgent disconnected");
+            setHasStarted(false);
+        },
+        onError: (error) => console.error("VoiceAgent error:", error),
+        micMuted: !isSpacePressed,
+    });
+
+    const startVoiceSession = useCallback(async () => {
+        try {
+            if (conversation.status === "connected" || conversation.status === "connecting") return;
+            await navigator.mediaDevices.getUserMedia({ audio: true });
+            await conversation.startSession({ agentId: AGENT_ID, connectionType: "websocket" });
+            setHasStarted(true);
+        } catch (err) {
+            console.error("Failed to start ElevenLabs session", err);
+        }
+    }, [conversation]);
+
+    // Handle Spacebar interactions globally
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            const activeTag = document.activeElement?.tagName.toLowerCase();
+            const isInput = activeTag === "input" || activeTag === "textarea" || activeTag === "select";
+
+            if (e.code === "Space" && !e.repeat && !isInput) {
+                e.preventDefault(); // Prevent page scrolling
+                setIsSpacePressed(true);
+
+                // Auto-connect on the first time they ever press space
+                if (!hasStarted && conversation.status !== "connected" && conversation.status !== "connecting") {
+                    startVoiceSession();
+                }
+            }
+        };
+
+        const handleKeyUp = (e: KeyboardEvent) => {
+            if (e.code === "Space") {
+                setIsSpacePressed(false);
+            }
+        };
+
+        window.addEventListener("keydown", handleKeyDown);
+        window.addEventListener("keyup", handleKeyUp);
+
+        return () => {
+            window.removeEventListener("keydown", handleKeyDown);
+            window.removeEventListener("keyup", handleKeyUp);
+        };
+    }, [hasStarted, conversation.status, startVoiceSession]);
+
+    return (
+        <>
+            {/* Premium Aurora Effect showing when space is pressed */}
+            <div
+                className={`fixed bottom-0 left-0 w-full h-[25vh] pointer-events-none z-40 transition-all duration-1000 ease-in-out ${isSpacePressed ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'
+                    }`}
+            >
+                <div className="absolute bottom-0 left-0 w-full h-full bg-gradient-to-t from-emerald-500/10 via-cyan-500/5 to-transparent mix-blend-screen" />
+
+                {/* Organic Animated Blobs */}
+                <div className="aurora-1 absolute -bottom-[15vh] left-[0%] w-[40vw] h-[30vh] bg-emerald-400 rounded-full mix-blend-screen blur-[120px] opacity-60" />
+                <div className="aurora-2 absolute -bottom-[20vh] left-[30%] w-[50vw] h-[30vh] bg-cyan-400 rounded-full mix-blend-screen blur-[140px] opacity-50" />
+                <div className="aurora-3 absolute -bottom-[15vh] left-[60%] w-[40vw] h-[30vh] bg-blue-500 rounded-full mix-blend-screen blur-[120px] opacity-60" />
+                <div className="pulse-soft absolute -bottom-[10vh] left-[45%] w-[10vw] h-[15vh] bg-white rounded-full mix-blend-screen blur-[100px] opacity-40" />
+            </div>
+
+            {/* Subtle Hint Text */}
+            <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none transition-all duration-700 font-sans tracking-[0.2em] text-xs uppercase ${isSpacePressed
+                ? 'opacity-0 translate-y-4'
+                : 'opacity-50 text-white translate-y-0'
+                }`}>
+                <div className="flex items-center gap-3">
+                    <div className="w-1.5 h-1.5 rounded-full bg-white/50 animate-pulse" />
+                    Hold Space
+                    <div className="w-1.5 h-1.5 rounded-full bg-white/50 animate-pulse" />
+                </div>
+            </div>
+
+            {/* Very faint agent speaking indicator */}
+            {hasStarted && conversation.isSpeaking && !isSpacePressed && (
+                <div className="fixed bottom-0 left-0 w-full h-[20vh] pointer-events-none z-30 transition-all duration-1000 ease-in-out opacity-80">
+                    <div className="pulse-soft absolute -bottom-[10vh] left-[40%] w-[20vw] h-[15vh] bg-blue-400 rounded-full mix-blend-screen blur-[120px]" />
+                </div>
+            )}
+        </>
+    );
+}

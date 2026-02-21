@@ -12,6 +12,7 @@
     "@elevenlabs/react": "^0.14.0",
     "d3-scale": "^4.0.2",
     "d3-scale-chromatic": "^3.1.0",
+    "framer-motion": "^12.34.3",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
@@ -22,8 +23,8 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "16.1.6",
+    "eslint": "^10.0.1",
+    "eslint-config-next": "^0.2.4",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
