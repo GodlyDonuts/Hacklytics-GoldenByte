@@ -92,7 +92,54 @@ export interface HealthResponse {
   };
 }
 
+export interface Crisis {
+  crisis_id: string;
+  crisis_name: string;
+  acaps_severity: number;
+  severity_class: string;
+  has_hrp: boolean;
+  appeal_type: string;
+  funding_state: string;
+  people_in_need: number;
+  funding_gap_usd: number;
+  funding_coverage_pct: number;
+  avg_b2b_ratio: number;
+  median_b2b_ratio: number;
+  project_count: number;
+  crisis_rank: number;
+}
+
+export interface GlobeCountry {
+  iso3: string;
+  country_name: string;
+  lat: number;
+  lng: number;
+  crises: Crisis[];
+}
+
+export interface GlobeCrisesResponse {
+  year: number;
+  month: number | null;
+  year_month: string;
+  countries: GlobeCountry[];
+}
+
 // -- API Functions --
+
+export async function getGlobeCrises(
+  year: number = 2024,
+  month?: number
+): Promise<GlobeCrisesResponse> {
+  const query = month ? `?year=${year}&month=${month}` : `?year=${year}`;
+  return apiFetch(`/api/globe/crises${query}`);
+}
+
+export async function getGlobeB2B(
+  iso3: string,
+  year: number = 2024
+): Promise<any> {
+  return apiFetch(`/api/globe/b2b?iso3=${iso3}&year=${year}`);
+}
 
 export async function getHealth(): Promise<HealthResponse> {
   return apiFetch("/api/health");

@@ -1,13 +1,14 @@
-"""Globe API — volcano data and B2B drill-down.
+"""Globe API -- volcano data and B2B drill-down.
 
 Serves crisis_summary for globe volcanoes and project_embeddings for B2B breakdown.
+All data is served from the in-memory cache (loaded once at startup).
 """
 
 from collections import defaultdict
 
 from fastapi import APIRouter, HTTPException, Query
 
-from ..services.databricks_client import execute_sql
+from ..services.cache import get_crises, get_projects
 
 router = APIRouter()
 
@@ -17,7 +18,7 @@ VALID_MONTHS = range(1, 13)
 
 def _validate_year(year: int) -> int:
     if year not in VALID_YEARS:
-        raise HTTPException(400, f"year must be 2022–2026, got {year}")
+        raise HTTPException(400, f"year must be 2022-2026, got {year}")
     return year
 
 
@@ -25,7 +26,7 @@ def _validate_month(month: int | None) -> int | None:
     if month is None:
         return None
     if month not in VALID_MONTHS:
-        raise HTTPException(400, f"month must be 1–12, got {month}")
+        raise HTTPException(400, f"month must be 1-12, got {month}")
     return month
 
 
@@ -39,23 +40,13 @@ def _validate_iso3(iso3: str) -> str:
 @router.get("/crises")
 async def get_globe_crises(
     year: int = Query(2024, ge=2022, le=2026),
-    month: int | None = Query(None, ge=1, le=12, description="Filter to specific month (1–12); omit for full year"),
+    month: int | None = Query(None, ge=1, le=12, description="Filter to specific month (1-12); omit for full year"),
 ):
-    """Volcano data for the globe. Queries crisis_summary on demand. Month-based for simpler view."""
+    """Volcano data for the globe. Served from in-memory cache."""
     year = _validate_year(year)
     month = _validate_month(month)
 
-    if month is not None:
-        where_clause = f"WHERE year = {year} AND month = {month}"
-    else:
-        where_clause = f"WHERE year = {year}"
-
-    try:
-        rows = await execute_sql(
-            f"SELECT * FROM workspace.default.crisis_summary {where_clause} ORDER BY iso3, crisis_rank"
-        )
-    except RuntimeError as e:
-        raise HTTPException(502, f"Databricks error: {e}") from e
+    rows = get_crises(year, month)
 
     # Group by country (iso3)
     by_country: dict[str, list] = defaultdict(list)
@@ -110,22 +101,11 @@ async def get_globe_b2b(
     iso3: str = Query(..., description="ISO3 country code"),
     year: int = Query(2024, ge=2022, le=2026),
 ):
-    """Project-level B2B breakdown when user clicks a volcano."""
+    """Project-level B2B breakdown when user clicks a volcano. Served from in-memory cache."""
     iso3 = _validate_iso3(iso3)
     year = _validate_year(year)
 
-    # Safe: iso3 validated as 3 alpha chars, year validated as int in range
-    try:
-        rows = await execute_sql(
-            f"""SELECT project_code, project_name, cluster, requested_funds,
-                target_beneficiaries, b2b_ratio, cost_per_beneficiary,
-                b2b_percentile, is_outlier, cluster_median_b2b
-            FROM workspace.default.project_embeddings
-            WHERE iso3 = '{iso3}' AND year = {year}
-            ORDER BY b2b_ratio DESC"""
-        )
-    except RuntimeError as e:
-        raise HTTPException(502, f"Databricks error: {e}") from e
+    rows = get_projects(iso3, year)
 
     projects = []
     for r in rows:
