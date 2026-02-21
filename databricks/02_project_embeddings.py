@@ -96,22 +96,20 @@ print(f"\nTotal plans: {len(plans_df)}")
 
 # COMMAND ----------
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 all_projects = []
 plan_rows = plans_df.to_dict("records")
 
-for i, plan in enumerate(plan_rows):
+def _fetch_plan_projects(plan):
+    """Fetch all projects for a single plan. Returns list of project dicts."""
     pid = plan["plan_id"]
-    if (i + 1) % 20 == 0 or i == 0:
-        print(f"  [{i+1}/{len(plan_rows)}] Fetching projects for plan {pid}...")
-
+    results = []
     try:
         resp = requests.get(f"{HPC_BASE}/project/plan/{pid}", timeout=30)
         if resp.ok:
             for p in resp.json().get("data", []):
                 code = p.get("code", "") or ""
-                # Extract ISO3 from project code: codes are like HSDN24-CSS-209320-1
-                # Always prefixed with a single letter (H=humanitarian, F=flash, etc.)
-                # so ISO3 is at positions 1:4
                 iso3_from_code = ""
                 if len(code) >= 4 and code[1:4].isalpha():
                     iso3_from_code = code[1:4].upper()
@@ -124,7 +122,7 @@ for i, plan in enumerate(plan_rows):
                 cur_funds = float(p.get("currentRequestedFunds", 0) or 0)
                 orig_funds = float(p.get("origRequestedFunds", 0) or 0)
 
-                all_projects.append({
+                results.append({
                     "project_code": code,
                     "project_name": (p.get("name", "") or "")[:300],
                     "plan_id": pid,
@@ -140,7 +138,18 @@ for i, plan in enumerate(plan_rows):
                 })
     except Exception:
         pass
-    time.sleep(0.2)
+    return results
+
+# Fetch projects concurrently (10 threads keeps us polite to the API)
+with ThreadPoolExecutor(max_workers=10) as executor:
+    futures = {executor.submit(_fetch_plan_projects, plan): plan for plan in plan_rows}
+    done = 0
+    for future in as_completed(futures):
+        done += 1
+        projects = future.result()
+        all_projects.extend(projects)
+        if done % 50 == 0 or done == len(plan_rows):
+            print(f"  [{done}/{len(plan_rows)}] plans fetched, {len(all_projects)} projects so far")
 
 print(f"Total projects collected: {len(all_projects)}")
 
