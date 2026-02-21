@@ -31,7 +31,7 @@ export default function GlobeView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
   const [selectedPoint, setSelectedPoint] = useState<MismatchPoint | null>(null);
-  const { selectedCountry, setSelectedCountry, flyToCoordinates, comparisonData } = useGlobeContext();
+  const { selectedCountry, setSelectedCountry, flyToCoordinates, comparisonData, viewMode } = useGlobeContext();
 
   const data = useMemo(() => MOCK_DATA, []);
 
@@ -49,10 +49,22 @@ export default function GlobeView() {
     return () => { globe._destructor?.(); };
   }, []);
 
-  const heatmapData = useMemo(
-    () => [data.map((d) => ({ lat: d.lat, lng: d.lng, weight: d.mismatch_score }))],
-    [data]
-  );
+  const heatmapData = useMemo(() => {
+    return [data.map((d) => {
+      let weight = d.mismatch_score;
+      if (viewMode === 'severity') {
+        // Normalize severity (people in need) to a max to get a 0-1 scale
+        weight = d.people_in_need / 30_000_000;
+      } else if (viewMode === 'funding-gap') {
+        // We use an arbitrary mock calculation for gap
+        weight = Math.max(0.1, d.mismatch_score - 0.2);
+      } else if (viewMode === 'anomalies') {
+        // Anomalies mode just emphasizes strictly the highest mismatch points
+        weight = d.mismatch_score > 0.6 ? d.mismatch_score : 0;
+      }
+      return { lat: d.lat, lng: d.lng, weight };
+    })];
+  }, [data, viewMode]);
 
   useEffect(() => {
     if (!globeRef.current || !data.length) return;

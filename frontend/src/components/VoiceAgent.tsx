@@ -9,7 +9,7 @@ const AGENT_ID = process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID || "agent_1201khzd2
 export function VoiceAgent() {
     const [isSpacePressed, setIsSpacePressed] = useState(false);
     const [hasStarted, setHasStarted] = useState(false);
-    const { setFlyToCoordinates, setComparisonData } = useGlobeContext();
+    const { setFlyToCoordinates, setComparisonData, setViewMode } = useGlobeContext();
 
     // We pass micMuted dynamic state directly to the hook
     const conversation = useConversation({
@@ -31,6 +31,11 @@ export function VoiceAgent() {
                     altitude: 1.5
                 });
                 return "Successfully moved the globe.";
+            },
+            change_view_mode: (parameters: { mode: 'severity' | 'funding-gap' | 'anomalies' }) => {
+                console.log("AI called change_view_mode:", parameters);
+                setViewMode(parameters.mode);
+                return `Successfully changed the view mode to ${parameters.mode}.`;
             },
             compare_countries: (parameters: {
                 sourceIso: string; targetIso: string;
