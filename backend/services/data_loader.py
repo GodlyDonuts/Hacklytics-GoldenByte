@@ -1,16 +1,23 @@
+import logging
+
 from .databricks_client import execute_sql
+
+logger = logging.getLogger(__name__)
 
 
 async def load_all_data() -> dict:
-    """Verify Databricks connectivity and load legacy tables for /api/countries."""
+    """Verify Databricks connectivity and load legacy tables for /api/countries.
+
+    Tables that don't exist are silently skipped so the new endpoints
+    (globe, benchmark, ask) can start without the old pipeline tables.
+    """
     await execute_sql("SELECT 1")
-    plans = await execute_sql("SELECT * FROM workspace.default.plans")
-    funding = await execute_sql("SELECT * FROM workspace.default.funding")
-    humanitarian_needs = await execute_sql("SELECT * FROM workspace.default.humanitarian_needs")
-    population = await execute_sql("SELECT * FROM workspace.default.population")
-    return {
-        "plans": plans,
-        "funding": funding,
-        "humanitarian_needs": humanitarian_needs,
-        "population": population,
-    }
+
+    result = {}
+    for table in ("plans", "funding", "humanitarian_needs", "population"):
+        try:
+            result[table] = await execute_sql(f"SELECT * FROM workspace.default.{table}")
+        except Exception as e:
+            logger.warning("Skipping legacy table %s: %s", table, e)
+            result[table] = []
+    return result
