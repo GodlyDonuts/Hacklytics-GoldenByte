@@ -31,7 +31,7 @@ export default function GlobeView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
   const [selectedPoint, setSelectedPoint] = useState<MismatchPoint | null>(null);
-  const { selectedCountry, setSelectedCountry, flyToCoordinates } = useGlobeContext();
+  const { selectedCountry, setSelectedCountry, flyToCoordinates, comparisonData } = useGlobeContext();
 
   const data = useMemo(() => MOCK_DATA, []);
 
@@ -105,7 +105,33 @@ export default function GlobeView() {
       .htmlElementVisibilityModifier((el, isVisible) => {
         (el as HTMLElement).style.opacity = isVisible ? "1" : "0";
       });
-  }, [data, heatmapData, selectedPoint, setSelectedCountry]);
+
+    // Configure Comparison Arcs
+    if (comparisonData) {
+      globe
+        .arcsData([
+          {
+            startLat: comparisonData.sourceLat,
+            startLng: comparisonData.sourceLng,
+            endLat: comparisonData.targetLat,
+            endLng: comparisonData.targetLng,
+            color: ['#00FF88', '#00DDFF']
+          }
+        ])
+        .arcStartLat(d => (d as any).startLat)
+        .arcStartLng(d => (d as any).startLng)
+        .arcEndLat(d => (d as any).endLat)
+        .arcEndLng((d: any) => d.endLng)
+        .arcColor((d: any) => d.color)
+        .arcDashLength(0.4)
+        .arcDashGap(0.2)
+        .arcDashInitialGap(() => Math.random())
+        .arcDashAnimateTime(1500)
+        .arcAltitude(0.5);
+    } else {
+      globe.arcsData([]);
+    }
+  }, [data, heatmapData, selectedPoint, setSelectedCountry, comparisonData]);
 
   // Handle flyToCoordinates changes
   useEffect(() => {

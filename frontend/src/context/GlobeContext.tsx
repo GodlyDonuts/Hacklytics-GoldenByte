@@ -8,6 +8,13 @@ export interface GlobeState {
   viewMode: 'severity' | 'funding-gap' | 'anomalies';
   layersVisible: { choropleth: boolean; heatmap: boolean; points: boolean };
   flyToCoordinates: { lat: number; lng: number; altitude?: number } | null;
+  comparisonData: {
+    sourceIso: string; targetIso: string;
+    sourceLat: number; sourceLng: number;
+    targetLat: number; targetLng: number;
+    sourceStats: { mismatch: number; peopleInNeed: number; risk: number; severity: number; gap: number; };
+    targetStats: { mismatch: number; peopleInNeed: number; risk: number; severity: number; gap: number; };
+  } | null;
 }
 
 type GlobeContextValue = GlobeState & {
@@ -16,6 +23,7 @@ type GlobeContextValue = GlobeState & {
   setViewMode: (mode: GlobeState['viewMode']) => void;
   setLayersVisible: React.Dispatch<React.SetStateAction<GlobeState['layersVisible']>>;
   setFlyToCoordinates: React.Dispatch<React.SetStateAction<GlobeState['flyToCoordinates']>>;
+  setComparisonData: React.Dispatch<React.SetStateAction<GlobeState['comparisonData']>>;
 };
 
 const defaultState: GlobeState = {
@@ -24,6 +32,7 @@ const defaultState: GlobeState = {
   viewMode: 'severity',
   layersVisible: { choropleth: true, heatmap: true, points: true },
   flyToCoordinates: null,
+  comparisonData: null,
 };
 
 const GlobeContext = createContext<GlobeContextValue | null>(null);
@@ -34,6 +43,7 @@ export function GlobeProvider({ children }: { children: ReactNode }) {
   const [viewMode, setViewMode] = useState<GlobeState['viewMode']>(defaultState.viewMode);
   const [layersVisible, setLayersVisible] = useState<GlobeState['layersVisible']>(defaultState.layersVisible);
   const [flyToCoordinates, setFlyToCoordinates] = useState<GlobeState['flyToCoordinates']>(defaultState.flyToCoordinates);
+  const [comparisonData, setComparisonData] = useState<GlobeState['comparisonData']>(defaultState.comparisonData);
 
   const value: GlobeContextValue = {
     selectedCountry,
@@ -41,11 +51,13 @@ export function GlobeProvider({ children }: { children: ReactNode }) {
     viewMode,
     layersVisible,
     flyToCoordinates,
+    comparisonData,
     setSelectedCountry,
     setFilters,
     setViewMode,
     setLayersVisible,
     setFlyToCoordinates,
+    setComparisonData,
   };
 
   return <GlobeContext.Provider value={value}>{children}</GlobeContext.Provider>;
