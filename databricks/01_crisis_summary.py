@@ -312,8 +312,9 @@ if len(funding_df) > 0:
             funding_df[col] = pd.to_numeric(funding_df[col], errors="coerce")
 
     # Identify HRP appeals per country-year
-    # has_hrp = True if any row for this location+year has appeal_type == "HRP"
-    hrp_mask = funding_df["appeal_type"].str.upper().str.strip() == "HRP"
+    # appeal_type contains full names: "Humanitarian response plan",
+    # "Humanitarian needs and response plan", etc.
+    hrp_mask = funding_df["appeal_type"].str.lower().str.contains("humanitarian", na=False)
 
     hrp_agg = (
         funding_df[hrp_mask]
