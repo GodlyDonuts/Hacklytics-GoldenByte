@@ -37,15 +37,17 @@ for year in range(2020, 2027):
     if resp.ok:
         plans = resp.json().get("data", [])
         for p in plans:
-            all_plans.append({
-                "id": p.get("id"),
-                "planVersion": p.get("planVersion", {}).get("id"),
-                "name": p.get("planVersion", {}).get("name", ""),
-                "year": year,
-                "revisedRequirements": p.get("revisedRequirements", 0),
-                "totalFunding": p.get("totalFunding", 0),
-                "categories": str(p.get("categories", [])),
-            })
+            all_plans.append(
+                {
+                    "id": p.get("id"),
+                    "planVersion": p.get("planVersion", {}).get("id"),
+                    "name": p.get("planVersion", {}).get("name", ""),
+                    "year": year,
+                    "revisedRequirements": p.get("revisedRequirements", 0),
+                    "totalFunding": p.get("totalFunding", 0),
+                    "categories": str(p.get("categories", [])),
+                }
+            )
         print(f"  -> {len(plans)} plans found")
     else:
         print(f"  -> Failed: {resp.status_code}")
@@ -74,9 +76,7 @@ all_flows = []
 for year in range(2020, 2027):
     print(f"Fetching funding flows for {year}...")
     resp = requests.get(
-        f"{HPC_BASE}/fts/flow",
-        params={"year": year, "groupby": "country"},
-        timeout=30
+        f"{HPC_BASE}/fts/flow", params={"year": year, "groupby": "country"}, timeout=30
     )
     if resp.ok:
         data = resp.json().get("data", {})
@@ -85,14 +85,16 @@ for year in range(2020, 2027):
         funding_totals = report.get("fundingTotals", {})
         objects = funding_totals.get("objects", [])
         for obj in objects:
-            all_flows.append({
-                "year": year,
-                "country_name": obj.get("name", ""),
-                "country_id": str(obj.get("id", "")),
-                "totalFunding": obj.get("totalFunding", 0),
-                "type": obj.get("type", ""),
-                "direction": obj.get("direction", ""),
-            })
+            all_flows.append(
+                {
+                    "year": year,
+                    "country_name": obj.get("name", ""),
+                    "country_id": str(obj.get("id", "")),
+                    "totalFunding": obj.get("totalFunding", 0),
+                    "type": obj.get("type", ""),
+                    "direction": obj.get("direction", ""),
+                }
+            )
         print(f"  -> {len(objects)} country-flow rows")
     else:
         print(f"  -> Failed: {resp.status_code}")
@@ -105,7 +107,9 @@ print(f"\nTotal flow rows collected: {len(all_flows)}")
 if all_flows:
     flows_pdf = pd.DataFrame(all_flows)
     flows_sdf = spark.createDataFrame(flows_pdf)
-    flows_sdf.write.format("delta").mode("overwrite").saveAsTable("workspace.default.funding_flows")
+    flows_sdf.write.format("delta").mode("overwrite").saveAsTable(
+        "workspace.default.funding_flows"
+    )
     print(f"Wrote {flows_sdf.count()} rows to workspace.default.funding_flows")
     display(flows_sdf.limit(10))
 else:
@@ -126,12 +130,8 @@ while True:
     print(f"Fetching humanitarian needs (offset={offset})...")
     resp = requests.get(
         f"{HDX_BASE}/affected-people/humanitarian-needs",
-        params={
-            "app_identifier": APP_ID,
-            "limit": page_limit,
-            "offset": offset
-        },
-        timeout=60
+        params={"app_identifier": APP_ID, "limit": page_limit, "offset": offset},
+        timeout=60,
     )
     if not resp.ok:
         print(f"  -> Failed: {resp.status_code}")
@@ -154,7 +154,9 @@ print(f"\nTotal humanitarian needs records: {len(all_needs)}")
 if all_needs:
     needs_pdf = pd.DataFrame(all_needs)
     needs_sdf = spark.createDataFrame(needs_pdf)
-    needs_sdf.write.format("delta").mode("overwrite").saveAsTable("workspace.default.humanitarian_needs")
+    needs_sdf.write.format("delta").mode("overwrite").saveAsTable(
+        "workspace.default.humanitarian_needs"
+    )
     print(f"Wrote {needs_sdf.count()} rows to workspace.default.humanitarian_needs")
 else:
     print("No needs data to write")
@@ -173,12 +175,8 @@ while True:
     print(f"Fetching population data (offset={offset})...")
     resp = requests.get(
         f"{HDX_BASE}/population-social/population",
-        params={
-            "app_identifier": APP_ID,
-            "limit": 1000,
-            "offset": offset
-        },
-        timeout=60
+        params={"app_identifier": APP_ID, "limit": 1000, "offset": offset},
+        timeout=60,
     )
     if not resp.ok:
         print(f"  -> Failed: {resp.status_code}")
@@ -201,7 +199,9 @@ print(f"\nTotal population records: {len(all_pop)}")
 if all_pop:
     pop_pdf = pd.DataFrame(all_pop)
     pop_sdf = spark.createDataFrame(pop_pdf)
-    pop_sdf.write.format("delta").mode("overwrite").saveAsTable("workspace.default.population")
+    pop_sdf.write.format("delta").mode("overwrite").saveAsTable(
+        "workspace.default.population"
+    )
     print(f"Wrote {pop_sdf.count()} rows to workspace.default.population")
 else:
     print("No population data to write")
