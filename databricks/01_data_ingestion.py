@@ -1,5 +1,6 @@
 # Databricks notebook source
 
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -21,7 +22,7 @@ import time
 
 HPC_BASE = "https://api.hpc.tools/v1/public"
 HDX_BASE = "https://hapi.humdata.org/api/v2"
-APP_ID = base64.b64encode(b"CrisisTopography:team@hacklytics.org").decode()
+APP_ID = base64.b64encode(b"CrisisTopography:pa636132@ucf.edu").decode()
 
 # COMMAND ----------
 
