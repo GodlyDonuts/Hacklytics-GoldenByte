@@ -12,6 +12,14 @@
 
 # COMMAND ----------
 
+# MAGIC %pip install databricks-vectorsearch
+
+# COMMAND ----------
+
+dbutils.library.restartPython()
+
+# COMMAND ----------
+
 import pandas as pd
 from databricks.vector_search.client import VectorSearchClient
 
@@ -27,12 +35,12 @@ print(f"Building RAG documents for {len(mismatch)} countries...")
 
 documents = []
 for _, row in mismatch.iterrows():
-    people = row.get("people_in_need", 0) or 0
-    funding = row.get("total_funding", 0) or 0
-    per_capita = row.get("funding_per_capita", 0) or 0
-    coverage = row.get("coverage_ratio", 0) or 0
-    severity = row.get("severity", 0) or 0
-    mismatch_score = row.get("mismatch_score", 0) or 0
+    people = float(row.get("people_in_need", 0) or 0)
+    funding = float(row.get("total_funding", 0) or 0)
+    per_capita = float(row.get("funding_per_capita", 0) or 0)
+    coverage = float(row.get("coverage_ratio", 0) or 0)
+    severity = float(row.get("severity", 0) or 0)
+    mismatch_score = float(row.get("mismatch_score", 0) or 0)
 
     text = (
         f"Country: {row['country']} (ISO3: {row['iso3']}). "
@@ -51,8 +59,8 @@ for _, row in mismatch.iterrows():
     documents.append({
         "id": str(row["iso3"]),
         "text": text,
-        "location_code": row["iso3"],
-        "country_name": row["country"],
+        "location_code": str(row["iso3"]),
+        "country_name": str(row["country"]),
         "severity": float(severity),
         "mismatch_score": float(mismatch_score),
     })
@@ -76,8 +84,10 @@ print(f"Wrote {docs_sdf.count()} rows to workspace.default.rag_documents")
 
 # MAGIC %md
 # MAGIC ## 3. Create Vector Search Endpoint and Index
-# MAGIC Databricks Free Edition allows 1 Vector Search endpoint.
+# MAGIC Databricks Free Edition allows 1 Vector Search endpoint, 1 unit.
 # MAGIC The index uses managed embeddings (databricks-bge-large-en) so no GPU needed.
+# MAGIC
+# MAGIC After creating the index, it takes a few minutes to sync and become queryable.
 
 # COMMAND ----------
 
@@ -91,12 +101,18 @@ except Exception as e:
     if "already exists" in str(e).lower():
         print("Endpoint crisis-rag-endpoint already exists, reusing.")
     else:
-        raise e
+        print(f"Endpoint creation error: {e}")
+        print("If on Free Edition, check that you don't already have an endpoint.")
 
 # COMMAND ----------
 
-# Create (or recreate) the Delta Sync index
-# This automatically embeds the "text" column using the managed embedding model
+# Enable Change Data Feed on the source table (required for Delta Sync index)
+spark.sql("ALTER TABLE workspace.default.rag_documents SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
+print("Enabled Change Data Feed on workspace.default.rag_documents")
+
+# COMMAND ----------
+
+# Create the Delta Sync index
 try:
     vsc.create_delta_sync_index(
         endpoint_name="crisis-rag-endpoint",
@@ -109,25 +125,24 @@ try:
         columns_to_sync=["id", "text", "location_code", "country_name", "severity", "mismatch_score"]
     )
     print("Created vector search index: workspace.default.rag_index")
+    print("Wait a few minutes for the index to sync before querying.")
 except Exception as e:
     if "already exists" in str(e).lower():
         print("Index already exists. To recreate, delete it first.")
     else:
-        raise e
+        print(f"Index creation error: {e}")
+        print("\nIf the embedding model endpoint is not found, try one of:")
+        print("  - databricks-bge-large-en")
+        print("  - databricks-gte-large-en")
+        print("  - system.ai.databricks-bge-large-en")
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## 4. Test the Vector Search Index
-# MAGIC Wait a few minutes after creation for the index to sync, then test.
+# MAGIC Run this cell after waiting a few minutes for the index to sync.
 
 # COMMAND ----------
-
-import time
-
-# Give the index time to sync (first run only)
-print("Waiting 30 seconds for index to initialize...")
-time.sleep(30)
 
 try:
     index = vsc.get_index("crisis-rag-endpoint", "workspace.default.rag_index")
