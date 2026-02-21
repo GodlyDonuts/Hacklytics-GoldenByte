@@ -3,6 +3,9 @@ import json
 import os
 import httpx
 
+# Default vector search index (from REFACTOR_PLAN)
+DEFAULT_VECTOR_INDEX = "workspace.default.project_embeddings_index"
+
 
 async def execute_sql(statement: str, warehouse_id: str | None = None) -> list[dict]:
     """Execute SQL via EXTERNAL_LINKS disposition and return rows as list of dicts."""
@@ -75,3 +78,78 @@ async def execute_sql(statement: str, warehouse_id: str | None = None) -> list[d
             rows.extend(chunk_rows)
 
     return [dict(zip(columns, row)) for row in rows]
+
+
+async def vector_search(
+    query_text: str,
+    index_name: str = DEFAULT_VECTOR_INDEX,
+    num_results: int = 5,
+    columns: list[str] | None = None,
+) -> list[dict]:
+    """Query a Databricks Vector Search index by text. Returns list of result dicts."""
+    host = os.getenv("DATABRICKS_HOST")
+    token = os.getenv("DATABRICKS_TOKEN")
+    if not host or not token:
+        raise ValueError("DATABRICKS_HOST and DATABRICKS_TOKEN required for vector search")
+
+    # Default columns for project_embeddings (REFACTOR_PLAN schema)
+    if columns is None:
+        columns = [
+            "project_id",
+            "project_code",
+            "project_name",
+            "iso3",
+            "country_name",
+            "cluster",
+            "b2b_ratio",
+            "cost_per_beneficiary",
+            "text_blob",
+        ]
+
+    url = f"{host.rstrip('/')}/api/2.0/vector-search/indexes/{index_name}/query"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    payload = {
+        "query_text": query_text,
+        "columns": columns,
+        "num_results": num_results,
+    }
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(url, headers=headers, json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+
+    # Response shape: {"result": {"data_array": [[...], ...], "columns": [...]}}
+    result = data.get("result", {})
+    cols = result.get("columns", columns)
+    rows = result.get("data_array", [])
+    return [dict(zip(cols, row)) for row in rows]
+
+
+async def query_llm(
+    prompt: str,
+    model: str = "databricks-meta-llama-3-1-70b-instruct",
+) -> str:
+    """Call a Databricks Foundation Model serving endpoint."""
+    host = os.getenv("DATABRICKS_HOST")
+    token = os.getenv("DATABRICKS_TOKEN")
+    if not host or not token:
+        raise ValueError("DATABRICKS_HOST and DATABRICKS_TOKEN required for LLM")
+
+    url = f"{host.rstrip('/')}/serving-endpoints/{model}/invocations"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    payload = {
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 500,
+    }
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(url, headers=headers, json=payload)
+        resp.raise_for_status()
+        out = resp.json()
+
+    # Chat completion format: {"choices": [{"message": {"content": "..."}}]}
+    choices = out.get("choices", [])
+    if not choices:
+        raise RuntimeError("LLM returned no choices")
+    return choices[0].get("message", {}).get("content", "")

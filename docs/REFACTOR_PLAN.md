@@ -52,7 +52,7 @@
 │  ElevenLabs React SDK (voice-driven benchmarking)                │
 │                                                                  │
 │  API calls:                                                      │
-│    GET  /api/globe/crises?year=2024          → volcano data      │
+│    GET  /api/globe/crises?year=2024&month=2  → volcano data      │
 │    GET  /api/globe/b2b?iso3=SDN&year=2024   → project drill-down │
 │    POST /api/benchmark                       → embedding search  │
 │    POST /api/ask                             → RAG Q&A           │
@@ -80,7 +80,7 @@
 │    directly into final  │   │  ┌──────────────────────────────┐  │
 │    tables)              │   │  │  crisis_summary              │  │
 │                         │   │  │  One row per crisis per       │  │
-│  • HPC /plan/year/YYYY  │   │  │  country per year. Max 8     │  │
+│  • HPC /plan/year/YYYY  │   │  │  country per year-month.    │  │
 │  • HPC /project/plan/ID │   │  │  per country. Drives globe.  │  │
 │  • HPC /fts/flow        │   │  └──────────────────────────────┘  │
 │  • HDX HAPI /hum-needs  │   │                                    │
@@ -111,14 +111,47 @@ All API calls are scoped to **2022–2026**.
 
 > **FTS Flows is dead.** The old HPC endpoint (`/v1/public/fts/flow`) stops at Dec 2017. The replacement is the **HDX HAPI Funding endpoint** (`/api/v2/coordination-context/funding`), which is backed by the same OCHA FTS data but exposed through HDX HAPI with current data, proper filtering, and a `has_hrp` flag built in. This is also the dataset behind [Global Requirements and Funding Data on HDX](https://data.humdata.org/dataset/global-requirements-and-funding-data).
 
-| Source | Endpoint | Year Filter Strategy |
+| Source | Endpoint | Filter Strategy |
 |---|---|---|
 | HPC Plans | `/v1/public/plan/year/{y}` | Loop y = 2022..2026 |
 | HPC Projects | `/v1/public/project/plan/{planId}` | Derived from plans within 2022–2026 |
 | **HDX HAPI Funding** | `GET /api/v2/coordination-context/funding` | `start_date=2022-01-01&end_date=2026-12-31`, paginate with `limit=10000&offset=N` |
 | HDX Humanitarian Needs | `/v2/affected-people/humanitarian-needs` | Filter `reference_period_start` >= 2022-01-01 |
 | HDX Population | `/v2/geography-infrastructure/baseline-population` | Take latest available |
-| ACAPS Severity | ACAPS Inform Severity Index API | Filter response by date >= 2022-01-01 |
+| **ACAPS Severity** | `GET /api/v1/inform-severity-index/{Month}{Year}/` | **Month-based** — one API call per month (e.g. `Feb2026`, `Jan2024`) |
+
+#### ACAPS Inform Severity Index API — Detail
+
+**Base URL:** `https://api.acaps.org`
+
+The ACAPS API is **month-based**. Each call returns all crises for a specific month. This enables a simpler, less cluttered globe view when displaying one month at a time.
+
+**Authentication:** Token-based. Obtain a token first, then include it in subsequent requests.
+
+1. **Obtain token:**
+   ```
+   POST /api/v1/token-auth/
+   Content-Type: application/x-www-form-urlencoded
+
+   username=<email>   # Your ACAPS account email
+   password=<pwd>    # Your ACAPS account password
+   ```
+
+2. **Fetch crises for a month:**
+   ```
+   GET /api/v1/inform-severity-index/{Month}{Year}/
+   Accept: application/json
+   Authorization: Token <your_token>
+   X-CSRFToken: <csrf_token>
+   ```
+
+   **Month format:** 3-letter month + 4-digit year, e.g. `Jan2024`, `Feb2026`, `Dec2022`.
+
+**Primary data source for Databricks:** A pre-generated CSV containing all crises from Jan 2022–Dec 2026 (48 months) is provided for ingestion. This avoids 48 API calls during notebook runs.
+
+**Primary data source — CSV:** A pre-generated CSV (`acaps_crises_2022_2026.csv`) contains all crises from Jan 2022–Dec 2026 (48 months). The Databricks notebook reads this CSV to avoid 48 API calls. Expected columns: `iso3`, `country_name`, `crisis_id`, `crisis_name`, `severity` (or `acaps_severity`), `year`, `month`, plus any ACAPS-specific fields. Split by month in the source; Databricks ingests and joins with funding/needs.
+
+**Stretch goal — Scheduled monthly refresh:** A job (e.g. Databricks Job or cron) runs on the 1st of each month to pull the previous month's crises via `GET /api/v1/inform-severity-index/{PrevMonth}{PrevYear}/` and append to `crisis_summary`. Requires `ACAPS_USERNAME`, `ACAPS_PASSWORD` in environment; obtain token via `POST /api/v1/token-auth/` before each API call.
 
 #### HDX HAPI Funding Endpoint — Detail
 
@@ -167,11 +200,11 @@ The classification is stored as `funding_state` in the `crisis_summary` table.
 
 ### 3.4 Table 1: `crisis_summary`
 
-**Drives the globe volcanoes.** One row per crisis per country per year, capped at 8 crises per country.
+**Drives the globe volcanoes.** One row per crisis per country per **year-month**, capped at 8 crises per country per month. Month granularity enables a simpler, less cluttered globe view when displaying one month at a time.
 
 **Notebook: `01_crisis_summary.py`**
 
-This single notebook ingests from APIs, joins everything, classifies each crisis into a funding state, and writes the final table.
+This single notebook ingests from a CSV (or ACAPS API), joins with funding/needs/projects, classifies each crisis into a funding state, and writes the final table.
 
 #### Schema
 
@@ -182,6 +215,8 @@ This single notebook ingests from APIs, joins everything, classifies each crisis
 | `lat` | FLOAT | Country centroid latitude |
 | `lng` | FLOAT | Country centroid longitude |
 | `year` | INT | 2022–2026 |
+| `month` | INT | 1–12 (January = 1) |
+| `year_month` | STRING | `YYYY-MM` for display (e.g. `2024-02`) |
 | `crisis_id` | STRING | ACAPS crisis identifier |
 | `crisis_name` | STRING | Crisis display name |
 | `acaps_severity` | FLOAT | Severity score (0–5), drives volcano bar height |
@@ -216,12 +251,14 @@ ACAPS_URL = "https://api.acaps.org/api/v1/inform-severity-index/"
 APP_ID = base64.b64encode(b"CrisisTopography:team@hacklytics.com").decode()
 YEARS = range(2022, 2027)
 
-# ── Step 1: Pull ACAPS severity (the spine) ──
-acaps_resp = requests.get(ACAPS_URL, params={"format": "json", "limit": 2000})
-acaps_raw = acaps_resp.json().get("results", [])
-acaps_df = pd.DataFrame(acaps_raw)
-# Filter to 2022–2026, extract: iso3, crisis_id, crisis_name, severity, year
-# Derive severity_class from score thresholds:
+# ── Step 1: Load ACAPS severity (the spine) ──
+# PRIMARY: Load from CSV (48 months Jan2022–Dec2026) to avoid 48 API calls.
+# CSV columns: iso3, country_name, crisis_id, crisis_name, severity, year, month, etc.
+# STRETCH: Loop over 48 months and call GET /api/v1/inform-severity-index/{Month}{Year}/
+#   with token auth (POST /api/v1/token-auth/ first for username/password).
+#
+acaps_df = pd.read_csv("acaps_crises_2022_2026.csv")  # or build from API
+# Ensure year, month columns. Derive severity_class from score thresholds:
 #   0–1 = Very Low, 1–2 = Low, 2–3 = Medium, 3–4 = High, 4–5 = Very High
 
 # ── Step 2: Pull HRP plans (for plan IDs needed in Step 5) ──
@@ -334,8 +371,8 @@ b2b_agg = projects_df.groupby(["iso3", "year"]).agg(
 global_b2b_p25 = projects_df["b2b_ratio"].quantile(0.25)
 
 # ── Step 6: Join everything ──
-# Start with acaps_df as the spine (one row per crisis per country-year)
-# Left join hrp_flags on iso3 + year → has_hrp, appeal_type, appeal_code,
+# Start with acaps_df as the spine (one row per crisis per country-year-month)
+# Left join hrp_flags on iso3 + year (funding is year-level) → has_hrp, appeal_type, appeal_code,
 #   requirements_usd, funding_usd, funding_gap_usd, funding_coverage_pct
 # Left join needs_agg on iso3 + year → people_in_need
 # Left join b2b_agg on iso3 + year → avg_b2b_ratio, median_b2b_ratio, project_count
@@ -353,8 +390,9 @@ global_b2b_p25 = projects_df["b2b_ratio"].quantile(0.25)
 #       funding_state = "ADEQUATE"
 
 # ── Step 8: Add lat/lng from static centroid lookup ──
-# Rank crises within each country by acaps_severity DESC
-# Filter to crisis_rank <= 8
+# Add year_month = f"{year}-{month:02d}" for display
+# Rank crises within each country-month by acaps_severity DESC
+# Filter to crisis_rank <= 8 per country per month
 
 # ── Step 9: Write ──
 crisis_summary_sdf = spark.createDataFrame(final_df)
@@ -566,16 +604,23 @@ The old tables (`plans`, `funding`, `humanitarian_needs`, `population`) remain u
 
 ### 4.1 New Router: `/api/globe/crises`
 
-**Purpose:** Serve volcano data for the globe. Queries `crisis_summary` on demand.
+**Purpose:** Serve volcano data for the globe. Queries `crisis_summary` on demand. **Month-based** for a simpler, less cluttered view.
 
 ```
-GET /api/globe/crises?year=2024
+GET /api/globe/crises?year=2024&month=2
 ```
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `year` | int | 2022–2026 |
+| `month` | int | 1–12 (optional; if omitted, returns all months for the year) |
 
 Response:
 ```json
 {
   "year": 2024,
+  "month": 2,
+  "year_month": "2024-02",
   "countries": [
     {
       "iso3": "SDN",
@@ -608,11 +653,11 @@ Response:
 Implementation: Direct SQL via `databricks_client.execute_sql()`:
 ```sql
 SELECT * FROM workspace.default.crisis_summary
-WHERE year = :year
+WHERE year = :year AND (:month IS NULL OR month = :month)
 ORDER BY iso3, crisis_rank
 ```
 
-Then group rows by `iso3` in Python before returning.
+When `month` is provided, filter to that month. When omitted, return all 12 months for the year. Group rows by `iso3` in Python before returning.
 
 ### 4.2 New Router: `/api/globe/b2b`
 
@@ -805,7 +850,7 @@ The new globe endpoints (`/api/globe/crises`, `/api/globe/b2b`) query `crisis_su
 backend/
 ├── main.py                          # Updated lifespan, new routers
 ├── requirements.txt                 # Unchanged (or add google-generativeai)
-├── .env                             # DATABRICKS_HOST, DATABRICKS_TOKEN, WAREHOUSE_ID, ELEVENLABS_API_KEY
+├── .env                             # DATABRICKS_HOST, DATABRICKS_TOKEN, WAREHOUSE_ID, ELEVENLABS_API_KEY, ACAPS_USERNAME, ACAPS_PASSWORD (stretch)
 ├── routers/
 │   ├── globe.py                     # NEW — GET /crises, GET /b2b
 │   ├── benchmark.py                 # NEW — POST /benchmark
@@ -938,8 +983,10 @@ const FUNDING_STATE_COLORS = {
 // frontend/src/lib/api.ts
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-export async function fetchGlobeCrises(year: number) {
-  const res = await fetch(`${API_BASE}/api/globe/crises?year=${year}`);
+export async function fetchGlobeCrises(year: number, month?: number) {
+  const params = new URLSearchParams({ year: String(year) });
+  if (month != null) params.set("month", String(month));
+  const res = await fetch(`${API_BASE}/api/globe/crises?${params}`);
   return res.json();
 }
 
@@ -988,7 +1035,7 @@ frontend/src/
 │   ├── B2BChart.tsx                 # Bar chart of B2B ratios per project
 │   ├── SidePanel.tsx                # Filters (year, cluster) + country list
 │   ├── VoiceAgent.tsx               # ElevenLabs integration
-│   └── YearSelector.tsx             # Year filter (2022–2026)
+│   └── MonthYearSelector.tsx         # Year (2022–2026) + month (1–12) filter
 ├── context/
 │   └── GlobeContext.tsx             # Shared state
 ├── lib/
@@ -1005,6 +1052,7 @@ interface GlobeState {
   selectedCountry: string | null;
   selectedCrisis: CrisisSummary | null;
   year: number;                      // 2022–2026
+  month: number | null;              // 1–12 or null for full year
   viewMode: 'volcanoes' | 'b2b-detail';
   volcanoData: CountryVolcano[];     // from /api/globe/crises
   b2bData: ProjectB2B[] | null;      // from /api/globe/b2b (on click)
@@ -1014,9 +1062,9 @@ interface GlobeState {
 ### 5.5 User Interaction Flow
 
 ```
-1. Page loads → fetch /api/globe/crises?year=2024
-2. Globe renders volcano clusters for all countries
-3. User changes year → re-fetch /api/globe/crises?year=YYYY
+1. Page loads → fetch /api/globe/crises?year=2024&month=2
+2. Globe renders volcano clusters for all countries (one month at a time for simpler view)
+3. User changes year or month → re-fetch /api/globe/crises?year=YYYY&month=M
 4. User hovers volcano bar → tooltip shows crisis name, severity, B2B ratio
 5. User clicks volcano bar → fetch /api/globe/b2b?iso3=XXX&year=YYYY
 6. CountryDrawer slides up with B2B breakdown chart
@@ -1118,21 +1166,25 @@ indicates better or worse efficiency (higher = more beneficiaries per dollar = b
 }
 ```
 
-**Tool 2: `filterByYear`** — Changes displayed year (2022–2026).
+**Tool 2: `filterByMonthYear`** — Changes displayed year and month (2022–2026, 1–12).
 
 ```json
 {
-  "name": "filterByYear",
-  "description": "Change the year of data displayed on the globe.",
+  "name": "filterByMonthYear",
+  "description": "Change the year and month of data displayed on the globe.",
   "parameters": {
     "type": "object",
     "properties": {
       "year": {
         "type": "integer",
         "description": "The year to display (2022-2026)"
+      },
+      "month": {
+        "type": "integer",
+        "description": "The month to display (1-12, January=1)"
       }
     },
-    "required": ["year"]
+    "required": ["year", "month"]
   }
 }
 ```
@@ -1167,9 +1219,10 @@ clientTools: {
     setSelectedCountry(iso3);
     return `Navigated to ${iso3}`;
   },
-  filterByYear: ({ year }) => {
+  filterByMonthYear: ({ year, month }) => {
     setYear(year);
-    return `Showing data for ${year}`;
+    setMonth(month);
+    return `Showing data for ${year}-${String(month).padStart(2, '0')}`;
   },
   benchmarkProject: async ({ project_code, num_neighbors }) => {
     const result = await fetchBenchmark(project_code, num_neighbors || 5);
@@ -1248,6 +1301,8 @@ The frontend expects exactly this shape from `/api/globe/crises`:
 ```json
 {
   "year": 2024,
+  "month": 2,
+  "year_month": "2024-02",
   "countries": [
     {
       "iso3": "string (ISO3)",
@@ -1281,7 +1336,7 @@ The frontend expects exactly this shape from `/api/globe/crises`:
 
 | Table | Rows | Purpose | Queried By |
 |---|---|---|---|
-| `workspace.default.crisis_summary` | ~200–400 (crises × years) | Globe volcanoes + B2B summary lines | `/api/globe/crises` |
+| `workspace.default.crisis_summary` | ~2,400–4,800 (crises × year-months) | Globe volcanoes + B2B summary lines | `/api/globe/crises` |
 | `workspace.default.project_embeddings` | ~5,000–15,000 (projects × years) | Drill-down, benchmarking, RAG | `/api/globe/b2b`, `/api/benchmark`, `/api/ask` |
 | `workspace.default.plans` | (legacy, unchanged) | Cross-reference for agent | `/api/countries` |
 | `workspace.default.funding` | (legacy, unchanged) | Cross-reference for agent | `/api/countries` |
@@ -1294,9 +1349,10 @@ The frontend expects exactly this shape from `/api/globe/crises`:
 
 ### Phase 1: Databricks
 
-- [ ] Notebook `01_crisis_summary.py` — pull ACAPS + HPC plans + FTS flows + HDX needs + project B2B aggregates → write `crisis_summary`
-- [ ] Verify `crisis_summary` has ACAPS severity scores, HRP flags, funding gaps, and B2B averages
-- [ ] Verify max 8 crises per country (crisis_rank filter)
+- [ ] Generate or obtain CSV `acaps_crises_2022_2026.csv` with 48 months of ACAPS crisis data (Jan 2022–Dec 2026)
+- [ ] Notebook `01_crisis_summary.py` — load ACAPS from CSV + HPC plans + HDX funding/needs + project B2B aggregates → write `crisis_summary` with `year`, `month`, `year_month`
+- [ ] Verify `crisis_summary` has ACAPS severity scores, HRP flags, funding gaps, B2B averages, and month granularity
+- [ ] Verify max 8 crises per country per month (crisis_rank filter)
 - [ ] Notebook `02_project_embeddings.py` — pull HPC projects → compute B2B ratios + percentiles + outlier flags → build text blobs → write `project_embeddings`
 - [ ] Create Vector Search index on `project_embeddings`
 - [ ] Verify vector search returns meaningful nearest neighbors
@@ -1320,7 +1376,7 @@ The frontend expects exactly this shape from `/api/globe/crises`:
 - [ ] Build B2B ratio lines within volcano bars
 - [ ] Build `VolcanoTooltip.tsx` for hover interactions
 - [ ] Build `CountryDrawer.tsx` with B2B breakdown chart
-- [ ] Build `SidePanel.tsx` with year selector (2022–2026) and filters
+- [ ] Build `SidePanel.tsx` with year (2022–2026) + month (1–12) selector and filters
 - [ ] Wire up click → `/api/globe/b2b` → drawer flow
 
 ### Phase 4: ElevenLabs Integration
@@ -1334,10 +1390,18 @@ The frontend expects exactly this shape from `/api/globe/crises`:
 
 ### Phase 5: End-to-End Validation
 
-- [ ] Query `crisis_summary` from frontend, verify volcano rendering
+- [ ] Query `crisis_summary` from frontend with `year` + `month`, verify volcano rendering
 - [ ] Click country → verify B2B detail loads from `project_embeddings`
 - [ ] Run benchmark query → verify nearest neighbors + B2B deltas
 - [ ] Ask ElevenLabs "Which crises lack HRP plans?" → verify RAG answer
-- [ ] Verify year filter (2022–2026) works across all endpoints
-- [ ] Verify max 8 crises per country on globe
+- [ ] Verify year + month filter (2022–2026, 1–12) works for `/api/globe/crises`
+- [ ] Verify max 8 crises per country per month on globe
 - [ ] Test with known cases: Sudan, Yemen, Ukraine, Bangladesh
+
+### Phase 6: Stretch — Scheduled ACAPS Refresh
+
+- [ ] Create job to run on 1st of each month
+- [ ] Obtain ACAPS token via `POST /api/v1/token-auth/` with `ACAPS_USERNAME`, `ACAPS_PASSWORD`
+- [ ] Call `GET /api/v1/inform-severity-index/{PrevMonth}{PrevYear}/` for previous month
+- [ ] Append/upsert new rows into `crisis_summary`
+
