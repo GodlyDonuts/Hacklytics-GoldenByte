@@ -3,14 +3,14 @@
 import { useConversation } from "@elevenlabs/react";
 import { useCallback, useState, useEffect } from "react";
 import { useGlobeContext } from "@/context/GlobeContext";
-import { queryGenie } from "@/lib/api";
+import { queryGenie, generateReport } from "@/lib/api";
 
 const AGENT_ID = process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID || "agent_1201khzd23t9fsaramppkhnftan0";
 
 export function VoiceAgent() {
     const [isSpacePressed, setIsSpacePressed] = useState(false);
     const [hasStarted, setHasStarted] = useState(false);
-    const { setFlyToCoordinates, setComparisonData, setViewMode, setGenieChartData } = useGlobeContext();
+    const { setFlyToCoordinates, setComparisonData, setViewMode, setGenieChartData, setSelectedCountry } = useGlobeContext();
 
     // We pass micMuted dynamic state directly to the hook
     const conversation = useConversation({
@@ -77,6 +77,23 @@ export function VoiceAgent() {
                     })
                     .catch((err) => console.error("Genie query failed:", err));
                 return "Querying the database now. Results will appear on screen shortly.";
+            },
+            generate_report: async (parameters: { scope?: 'global' | 'country'; iso3?: string }) => {
+                console.log("AI called generate_report:", parameters);
+                const scope = parameters.scope ?? 'global';
+                const iso3 = parameters.iso3;
+                generateReport(scope, iso3)
+                    .catch((err) => console.error("Report generation failed:", err));
+                return `Generating a ${scope} PDF report now. It will download automatically in a moment.`;
+            },
+            reset_view: (parameters: {}) => {
+                console.log("AI called reset_view:", parameters);
+                setViewMode('severity');
+                setComparisonData(null);
+                setGenieChartData(null);
+                setSelectedCountry(null);
+                setFlyToCoordinates({ lat: 20, lng: 0, altitude: 2.5 });
+                return "Successfully reset the globe view to default.";
             },
             end_conversation: (parameters: {}) => {
                 console.log("AI called end_conversation:", parameters);

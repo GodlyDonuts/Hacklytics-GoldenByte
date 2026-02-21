@@ -245,3 +245,32 @@ export async function getGlobeB2B(
 ): Promise<GlobeB2BResponse> {
   return apiFetch(`/api/globe/b2b?iso3=${iso3}&year=${year}`);
 }
+
+/**
+ * Triggers a PDF report download from the backend.
+ * scope: "global" | "country"
+ * iso3: required when scope === "country"
+ */
+export async function generateReport(
+  scope: "global" | "country" = "global",
+  iso3?: string
+): Promise<void> {
+  const params = new URLSearchParams({ scope });
+  if (iso3) params.set("iso3", iso3);
+
+  const res = await fetch(`${API_BASE}/report?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `Report generation failed: ${res.status}`);
+  }
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = scope === "country" && iso3
+    ? `Report_${iso3}.pdf`
+    : "Report_Global.pdf";
+  a.click();
+  URL.revokeObjectURL(url);
+}

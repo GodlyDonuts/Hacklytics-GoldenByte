@@ -4,7 +4,6 @@ import asyncio
 from fastapi import APIRouter, Request, Query, HTTPException
 from fastapi.responses import FileResponse
 from google import genai
-from google.genai import types
 from markdown_pdf import MarkdownPdf, Section
 
 router = APIRouter()
@@ -39,23 +38,23 @@ async def generate_report(request: Request, scope: str = Query("global"), iso3: 
         pct = (funding_usd / req_usd * 100) if req_usd > 0 else 0
         
         prompt = f"""
-Act as a senior geopolitical analyst presenting to the United Nations. Write a highly detailed, comprehensive intelligence report on the humanitarian crisis in {country_name}.
+Act as a senior geopolitical analyst. Write a concise but authoritative one-page intelligence report on the humanitarian crisis in {country_name}.
 
 Context Data:
 - Total Funding Requested: ${req_usd:,.2f}
 - Total Funding Received: ${funding_usd:,.2f}
 - Funding Coverage: {pct:.1f}%
 
-The report MUST be long enough to cover exactly 2 full pages when rendered to a standard PDF font size. Use professional markdown formatting (Headers, Lists, Bold text).
+Use professional markdown formatting (headers, bullet lists, bold text). Keep the total output under 600 words.
 
- Structure the report as follows:
- 1. Executive Summary
- 2. Current Crisis Overview and Historical Context
- 3. Financial Analysis (Analyze the funding gap and its implications)
- 4. Key Anomalies and Risk Factors
- 5. Strategic Recommendations for Donors
+Structure:
+1. Executive Summary (2-3 sentences)
+2. Crisis Overview
+3. Financial Analysis
+4. Key Risk Factors
+5. Recommendations
 
-Ensure the tone is urgent, analytical, and data-driven.
+Tone: urgent, data-driven.
 """
 
     else:
@@ -82,21 +81,21 @@ Ensure the tone is urgent, analytical, and data-driven.
         top_gaps_str = "\n".join([f"- {g['name']}: ${g['gap']:,.2f} shortfall" for g in top_gaps])
 
         prompt = f"""
-Act as a senior geopolitical analyst presenting to the United Nations. Write a highly detailed, comprehensive global intelligence report on worldwide humanitarian funding imbalances.
+Act as a senior geopolitical analyst. Write a concise but authoritative one-page global intelligence report on worldwide humanitarian funding imbalances.
 
 Context Data (Top 5 Largest Funding Gaps):
 {top_gaps_str}
 
-The report MUST be long enough to cover exactly 2 full pages when rendered to a standard PDF font size. Use professional markdown formatting (Headers, Lists, Bold text).
+Use professional markdown formatting (headers, bullet lists, bold text). Keep the total output under 600 words.
 
- Structure the report as follows:
- 1. Executive Global Summary
- 2. Macro-level Funding Deficits Analysis
- 3. Regional Deep Dives (Focus on the provided top 5 nations)
- 4. Systemic Anomalies in Global Aid Distribution
- 5. Strategic Recommendations for the International Community
+Structure:
+1. Executive Global Summary (2-3 sentences)
+2. Macro-level Funding Deficits
+3. Regional Deep Dives (focus on the top 5 nations above)
+4. Systemic Anomalies
+5. Recommendations
 
-Ensure the tone is urgent, analytical, and data-driven.
+Tone: urgent, data-driven.
 """
 
     # Call Gemini (run it in a threadpool since google.genai is sync)
@@ -104,11 +103,8 @@ Ensure the tone is urgent, analytical, and data-driven.
     
     def fetch_llm():
         response = client.models.generate_content(
-            model='gemini-3-flash-preview',
+            model='gemini-2.5-flash',
             contents=prompt,
-            config=types.GenerateContentConfig(
-                thinking_config=types.ThinkingConfig(thinking_level="high")
-            ),
         )
         return response.text
 
