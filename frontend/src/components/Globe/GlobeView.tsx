@@ -3,6 +3,7 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import Globe, { GlobeInstance } from "globe.gl";
 import GlobeControls from "./GlobeControls";
+import { useGlobeContext } from "@/context/GlobeContext";
 
 type MismatchPoint = {
   lat: number;
@@ -29,8 +30,8 @@ const MOCK_DATA: MismatchPoint[] = [
 export default function GlobeView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
-  const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
   const [selectedPoint, setSelectedPoint] = useState<MismatchPoint | null>(null);
+  const { selectedCountry, setSelectedCountry, flyToCoordinates } = useGlobeContext();
 
   const data = useMemo(() => MOCK_DATA, []);
 
@@ -64,7 +65,7 @@ export default function GlobeView() {
         .polygonSideColor(() => 'rgba(255, 255, 255, 0.1)') // Transparent sides
         .polygonStrokeColor(() => '#ffffff')      // White border lines
         .polygonAltitude(0.01)                     // Slightly above globe surface
-        // .globeImageUrl('//unpkg.com/three-globe/example/img/earth-dark.jpg');
+      // .globeImageUrl('//unpkg.com/three-globe/example/img/earth-dark.jpg');
     });
 
     globe
@@ -104,7 +105,21 @@ export default function GlobeView() {
       .htmlElementVisibilityModifier((el, isVisible) => {
         (el as HTMLElement).style.opacity = isVisible ? "1" : "0";
       });
-  }, [data, heatmapData, selectedPoint]);
+  }, [data, heatmapData, selectedPoint, setSelectedCountry]);
+
+  // Handle flyToCoordinates changes
+  useEffect(() => {
+    if (flyToCoordinates && globeRef.current) {
+      globeRef.current.pointOfView(
+        {
+          lat: flyToCoordinates.lat,
+          lng: flyToCoordinates.lng,
+          altitude: flyToCoordinates.altitude ?? 1.5
+        },
+        2000 // Transition duration in ms
+      );
+    }
+  }, [flyToCoordinates]);
 
   return (
     <div className="relative w-full h-screen">
