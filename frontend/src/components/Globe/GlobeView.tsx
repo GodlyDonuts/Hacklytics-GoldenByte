@@ -17,7 +17,7 @@ import GlobeControls from "./GlobeControls";
 import GenieChartPanel from "./GenieChartPanel";
 import CountryDetailOverlay from "./CountryDetailOverlay";
 import { useGlobeContext } from "@/context/GlobeContext";
-import { getGlobeCrises, GlobeCountry } from "@/lib/api";
+import { getGlobeCrises, GlobeCountry, getPredictiveRisks } from "@/lib/api";
 
 // Color gradient stops per view mode. Each maps a 0-1 range to RGB.
 const SEVERITY_STOPS: [number, number, number, number][] = [
@@ -115,8 +115,23 @@ export default function GlobeView() {
   const [geoReady, setGeoReady] = useState(false);
   const [hoveredIso, setHoveredIso] = useState<string | null>(null);
 
-  const { selectedCountry, setSelectedCountry, flyToCoordinates, comparisonData, viewMode, filters } =
+  const { selectedCountry, setSelectedCountry, flyToCoordinates, comparisonData, viewMode, filters, predictiveRisks, setPredictiveRisks } =
     useGlobeContext();
+
+  const [loadingRisks, setLoadingRisks] = useState(false);
+
+  // Fetch predictive risks when mode is activated
+  useEffect(() => {
+    if (viewMode === "predictive-risks" && !predictiveRisks && !loadingRisks) {
+      setLoadingRisks(true);
+      getPredictiveRisks()
+        .then((res) => {
+          setPredictiveRisks(res.risks);
+        })
+        .catch((err) => console.error("Failed to load predictive risks:", err))
+        .finally(() => setLoadingRisks(false));
+    }
+  }, [viewMode, predictiveRisks, setPredictiveRisks, loadingRisks]);
 
   // Fetch crisis data when year/month filters change
   useEffect(() => {
@@ -355,7 +370,52 @@ export default function GlobeView() {
     } else {
       globe.arcsData([]);
     }
-  }, [polygonFeatures, comparisonData, viewMode, spotlightIso, hoveredIso, selectedCountry, countryMetrics, setSelectedCountry]);
+
+    if (viewMode === "predictive-risks" && predictiveRisks) {
+      const markers = predictiveRisks.reduce((acc, risk) => {
+        const metrics = countryMetrics.get(risk.iso3);
+        if (metrics) {
+          acc.push({
+            lat: metrics.lat,
+            lng: metrics.lng,
+            risk,
+          });
+        }
+        return acc;
+      }, [] as { lat: number; lng: number; risk: PredictiveRisk }[]);
+
+      globe
+        .htmlElementsData(markers)
+        .htmlElement((d: any) => {
+          const el = document.createElement("div");
+          el.innerHTML = `
+            <div class="relative flex flex-col items-center justify-center translate-x-[-50%] translate-y-[-50%] pointer-events-auto cursor-pointer group">
+              <div class="w-8 h-8 bg-red-600/20 border-2 border-red-500 rounded-full animate-ping absolute"></div>
+              <div class="w-4 h-4 bg-red-500 rounded-full relative z-10 shadow-[0_0_15px_rgba(239,68,68,0.8)]"></div>
+              <div class="absolute top-6 left-1/2 -translate-x-1/2 mt-2 w-64 bg-black/90 border border-red-500/50 rounded-lg p-3 hidden group-hover:block z-50 pointer-events-none">
+                <div class="text-[10px] font-bold text-red-500 tracking-widest uppercase mb-1">
+                  SYS.PREDICT_RISK :: ${d.risk.risk_level}
+                </div>
+                <div class="text-sm font-semibold text-white mb-1">
+                  ${d.risk.risk_title}
+                </div>
+                <div class="text-xs text-gray-300 mb-2 leading-relaxed">
+                  ${d.risk.risk_description}
+                </div>
+                <div class="text-[10px] text-gray-500 mb-1 tracking-wider uppercase">Driving Factors:</div>
+                <ul class="text-[10px] text-gray-400 list-disc list-inside">
+                  ${d.risk.factors.map((f: string) => `<li>${f}</li>`).join('')}
+                </ul>
+              </div>
+            </div>
+          `;
+          return el;
+        });
+    } else {
+      globe.htmlElementsData([]);
+    }
+
+  }, [polygonFeatures, comparisonData, viewMode, spotlightIso, hoveredIso, selectedCountry, countryMetrics, setSelectedCountry, predictiveRisks]);
 
   // Camera: fly to coordinates from context
   useEffect(() => {
@@ -407,6 +467,14 @@ export default function GlobeView() {
           </div>
         </div>
       )}
+
+      {loadingRisks && viewMode === "predictive-risks" && (
+        <div className="absolute top-20 left-1/2 -translate-x-1/2 bg-black/80 border border-blue-500/50 rounded-lg px-6 py-3 text-sm text-blue-400 font-mono flex items-center gap-3">
+          <div className="w-4 h-4 rounded-full border-2 border-blue-500 border-t-transparent animate-spin"></div>
+          GEMINI INTELLIGENCE: ANALYZING ACTIAN VECTOR ANOMALIES...
+        </div>
+      )}
+
       <GlobeControls globeRef={globeRef} />
       <GenieChartPanel />
       <CountryDetailOverlay countries={data} />

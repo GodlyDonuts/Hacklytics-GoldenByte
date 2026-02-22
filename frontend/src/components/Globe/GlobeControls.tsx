@@ -13,6 +13,7 @@ const VIEW_MODES = [
   { key: "severity" as const, label: "Severity", desc: "ACAPS crisis severity" },
   { key: "funding-gap" as const, label: "Funding Gap", desc: "Unmet funding needs" },
   { key: "anomalies" as const, label: "Overlooked", desc: "Oversight score (most overlooked)" },
+  { key: "predictive-risks" as const, label: "Predictive Risks", desc: "AI-generated future safety risks" },
 ] as const;
 
 interface GlobeControlsProps {
@@ -58,11 +59,10 @@ export default function GlobeControls({ globeRef }: GlobeControlsProps) {
             type="button"
             onClick={() => setViewMode(m.key)}
             title={m.desc}
-            className={`px-4 py-2 rounded-lg text-xs font-medium transition-all ${
-              viewMode === m.key
+            className={`px-4 py-2 rounded-lg text-xs font-medium transition-all ${viewMode === m.key
                 ? "bg-[#00d4ff]/20 text-[#00d4ff] shadow-sm"
                 : "text-white/50 hover:text-white/80 hover:bg-white/5"
-            }`}
+              }`}
           >
             {m.label}
           </button>

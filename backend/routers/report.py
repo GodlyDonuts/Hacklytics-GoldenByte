@@ -3,7 +3,7 @@ import tempfile
 import asyncio
 from fastapi import APIRouter, Request, Query, HTTPException
 from fastapi.responses import FileResponse
-from google import genai
+import httpx
 from markdown_pdf import MarkdownPdf, Section
 
 from services.cache import get_crises
@@ -18,9 +18,9 @@ async def generate_report(request: Request, scope: str = Query("global"), iso3: 
     scope: "global" or "country"
     iso3: Country iso3 string (if scope == "country")
     """
-    gemini_key = os.getenv("GEMINI_KEY")
-    if not gemini_key:
-        raise HTTPException(status_code=500, detail="GEMINI_KEY not configured")
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    if not openrouter_key:
+        raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not configured")
 
     # Access cached Databricks data via the cache service instead of app.state
     funding_data = get_crises(year=2024)
@@ -113,18 +113,25 @@ Structure:
 Tone: urgent, data-driven.
 """
 
-    # Call Gemini (run it in a threadpool since google.genai is sync)
-    client = genai.Client(api_key=gemini_key)
-    
-    def fetch_llm():
-        print(f"DEBUG: Calling Gemini with prompt snippet: {prompt[:100]}...")
-        response = client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=prompt,
-        )
-        return response.text
+    # Call OpenRouter API
+    async def fetch_llm():
+        print(f"DEBUG: Calling OpenRouter with prompt snippet: {prompt[:100]}...")
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {openrouter_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "qwen/qwen3.5-397b-a17b",
+                    "messages": [{"role": "user", "content": prompt}]
+                }
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
 
-    markdown_content = await asyncio.to_thread(fetch_llm)
+    markdown_content = await fetch_llm()
 
     # markdown_pdf requires the document to start with a level-1 heading (#).
     # If Gemini skips straight to ## or prose, prepend a title.

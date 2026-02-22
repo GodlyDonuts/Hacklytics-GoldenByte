@@ -334,3 +334,24 @@ export async function generateReport(
   a.click();
   URL.revokeObjectURL(url);
 }
+
+// -- Predictive Risks --
+
+export interface PredictiveRisk {
+  iso3: string;
+  country_name: string;
+  risk_level: "High" | "Critical" | "Moderate" | string;
+  risk_title: string;
+  risk_description: string;
+  confidence_score: number;
+  factors: string[];
+}
+
+export interface PredictiveResponse {
+  risks: PredictiveRisk[];
+}
+
+export async function getPredictiveRisks(): Promise<PredictiveResponse> {
+  return apiFetch("/api/predictive/risks");
+}
+
