@@ -32,13 +32,16 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
   const [hasStarted, setHasStarted] = useState(false);
   const [textInput, setTextInput] = useState('');
   const [textError, setTextError] = useState<string | null>(null);
-  const { setFlyToCoordinates, setComparisonData, setViewMode, setGenieChartData, setSelectedCountry, selectedCountry, comparisonData } = useGlobeContext();
+  const { setFlyToCoordinates, setComparisonData, setViewMode, setGenieChartData, setSelectedCountry, setIsSpotlightActive, nearestSpotlightIso, selectedCountry, comparisonData } = useGlobeContext();
   const conversationRef = useRef<ReturnType<typeof useConversation> | null>(null);
 
   const globeStateRef = useRef({ selectedCountry, comparisonData });
+  const lastNavigatedIso3Ref = useRef<string | null>(null);
+  const nearestSpotlightIsoRef = useRef<string | null>(nearestSpotlightIso);
   useEffect(() => {
     globeStateRef.current = { selectedCountry, comparisonData };
-  }, [selectedCountry, comparisonData]);
+    nearestSpotlightIsoRef.current = nearestSpotlightIso;
+  }, [selectedCountry, comparisonData, nearestSpotlightIso]);
 
   const conversation = useConversation({
     onConnect: () => console.log('VoiceAgent connected'),
@@ -49,13 +52,18 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
     onError: (error) => console.error('VoiceAgent error:', error),
     micMuted: !isSpacePressed,
     clientTools: {
-      show_location_on_globe: (parameters: { lat: number; lng: number }) => {
+      show_location_on_globe: (parameters: { lat: number; lng: number; iso3?: string }) => {
         console.log('AI called show_location_on_globe:', parameters);
         setFlyToCoordinates({
           lat: parameters.lat,
           lng: parameters.lng,
           altitude: 1.5,
         });
+        if (parameters.iso3) {
+          lastNavigatedIso3Ref.current = parameters.iso3;
+          setSelectedCountry(parameters.iso3);
+        }
+        setIsSpotlightActive(true);
         return 'Successfully moved the globe.';
       },
       change_view_mode: (parameters: { mode: 'severity' | 'funding-gap' | 'anomalies' }) => {
@@ -131,6 +139,13 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
           } else if (currentComparison) {
             iso3 = currentComparison.sourceIso;
             scope = 'country';
+          } else if (lastNavigatedIso3Ref.current) {
+            iso3 = lastNavigatedIso3Ref.current;
+            scope = 'country';
+          } else if (nearestSpotlightIsoRef.current) {
+            // Use the nearest country to where the globe camera was last directed
+            iso3 = nearestSpotlightIsoRef.current;
+            scope = 'country';
           }
         }
 
@@ -144,6 +159,8 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
         setComparisonData(null);
         setGenieChartData(null);
         setSelectedCountry(null);
+        setIsSpotlightActive(false);
+        lastNavigatedIso3Ref.current = null;
         setFlyToCoordinates({ lat: 20, lng: 0, altitude: 2.5 });
         return 'Successfully reset the globe view to default.';
       },

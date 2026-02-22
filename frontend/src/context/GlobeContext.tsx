@@ -12,6 +12,8 @@ export interface GenieChartData {
 
 export interface GlobeState {
   selectedCountry: string | null;
+  isSpotlightActive: boolean;
+  nearestSpotlightIso: string | null;
   filters: {
     year: number;
     month: number | null;
@@ -35,6 +37,8 @@ export interface GlobeState {
 
 type GlobeContextValue = GlobeState & {
   setSelectedCountry: (country: string | null) => void;
+  setIsSpotlightActive: (active: boolean) => void;
+  setNearestSpotlightIso: (iso: string | null) => void;
   setFilters: React.Dispatch<React.SetStateAction<GlobeState['filters']>>;
   setViewMode: (mode: GlobeState['viewMode']) => void;
   setLayersVisible: React.Dispatch<React.SetStateAction<GlobeState['layersVisible']>>;
@@ -45,6 +49,8 @@ type GlobeContextValue = GlobeState & {
 
 const defaultState: GlobeState = {
   selectedCountry: null,
+  isSpotlightActive: false,
+  nearestSpotlightIso: null,
   filters: {
     year: 2024,
     month: null,
@@ -64,6 +70,8 @@ const GlobeContext = createContext<GlobeContextValue | null>(null);
 
 export function GlobeProvider({ children }: { children: ReactNode }) {
   const [selectedCountry, setSelectedCountry] = useState<string | null>(defaultState.selectedCountry);
+  const [isSpotlightActive, setIsSpotlightActive] = useState<boolean>(defaultState.isSpotlightActive);
+  const [nearestSpotlightIso, setNearestSpotlightIso] = useState<string | null>(defaultState.nearestSpotlightIso);
   const [filters, setFilters] = useState<GlobeState['filters']>(defaultState.filters);
   const [viewMode, setViewMode] = useState<GlobeState['viewMode']>(defaultState.viewMode);
   const [layersVisible, setLayersVisible] = useState<GlobeState['layersVisible']>(defaultState.layersVisible);
@@ -73,6 +81,8 @@ export function GlobeProvider({ children }: { children: ReactNode }) {
 
   const value: GlobeContextValue = {
     selectedCountry,
+    isSpotlightActive,
+    nearestSpotlightIso,
     filters,
     viewMode,
     layersVisible,
@@ -80,6 +90,8 @@ export function GlobeProvider({ children }: { children: ReactNode }) {
     comparisonData,
     genieChartData,
     setSelectedCountry,
+    setIsSpotlightActive,
+    setNearestSpotlightIso,
     setFilters,
     setViewMode,
     setLayersVisible,

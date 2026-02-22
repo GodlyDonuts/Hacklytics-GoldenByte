@@ -12,6 +12,7 @@ router = APIRouter()
 
 @router.get("/report")
 async def generate_report(request: Request, scope: str = Query("global"), iso3: str = Query(None)):
+    print(f"DEBUG: generate_report called with scope={scope}, iso3={iso3}")
     """
     Generates a 2-page PDF report using Gemini based on the current context scale.
     scope: "global" or "country"
@@ -29,12 +30,18 @@ async def generate_report(request: Request, scope: str = Query("global"), iso3: 
     prompt = ""
     # Structure the prompt based on the scope
     if scope == "country" and iso3:
+        iso3_target = iso3.strip().upper()
         # Find country specific info to feed to the LLM
-        country_info = [f for f in funding_data if (f.get("iso3") or f.get("location_code")) == iso3]
+        country_info = [
+            f for f in funding_data 
+            if (f.get("iso3") or f.get("location_code") or "").strip().upper() == iso3_target
+        ]
         
         country_name = iso3
         if country_info:
             country_name = country_info[0].get("country_name") or country_info[0].get("location_name") or iso3
+        else:
+            print(f"DEBUG: No data found for ISO3: {iso3_target}")
         
         funding_usd = sum(float(f.get("funding_usd") or 0) for f in country_info)
         gap_usd = sum(float(f.get("funding_gap_usd") or sum([float(f.get("requirements_usd") or 0) for f in country_info]) - funding_usd) for f in country_info)
@@ -49,7 +56,7 @@ Context Data:
 - Total Funding Received: ${funding_usd:,.2f}
 - Funding Coverage: {pct:.1f}%
 
-Use professional markdown formatting (headers, bullet lists, bold text). Keep the total output under 600 words.
+Begin your response with a single `#` H1 title. Use professional markdown formatting (headers, bullet lists, bold text). Keep the total output under 600 words.
 
 Structure:
 1. Executive Summary (2-3 sentences)
@@ -94,7 +101,7 @@ Act as a senior geopolitical analyst. Write a concise but authoritative one-page
 Context Data (Top 5 Largest Funding Gaps):
 {top_gaps_str}
 
-Use professional markdown formatting (headers, bullet lists, bold text). Keep the total output under 600 words.
+Begin your response with a single `#` H1 title. Use professional markdown formatting (headers, bullet lists, bold text). Keep the total output under 600 words.
 
 Structure:
 1. Executive Global Summary (2-3 sentences)
@@ -110,13 +117,24 @@ Tone: urgent, data-driven.
     client = genai.Client(api_key=gemini_key)
     
     def fetch_llm():
+        print(f"DEBUG: Calling Gemini with prompt snippet: {prompt[:100]}...")
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-2.0-flash',
             contents=prompt,
         )
         return response.text
 
     markdown_content = await asyncio.to_thread(fetch_llm)
+
+    # markdown_pdf requires the document to start with a level-1 heading (#).
+    # If Gemini skips straight to ## or prose, prepend a title.
+    first_line = markdown_content.lstrip().split('\n')[0]
+    if not first_line.startswith('# '):
+        if scope == "country" and iso3:
+            title = f"# Humanitarian Intelligence Report: {iso3}\n\n"
+        else:
+            title = "# Global Humanitarian Intelligence Report\n\n"
+        markdown_content = title + markdown_content
 
     # Generate the PDF
     def generate_pdf(md_text):

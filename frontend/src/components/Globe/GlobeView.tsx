@@ -27,8 +27,6 @@ const COLOR_STOPS: [number, number, number, number][] = [
   [1.0, 230, 40, 40],    // red (severity 5)
 ];
 
-const NEUTRAL_CAP = "rgba(255, 255, 255, 0.03)";
-const NEUTRAL_SIDE = "rgba(255, 255, 255, 0.02)";
 const DIMMED_CAP = "rgba(255, 255, 255, 0.06)";
 const DIMMED_SIDE = "rgba(255, 255, 255, 0.03)";
 
@@ -71,12 +69,36 @@ function sideColor(severity: number): string {
   return `rgba(${Math.round(r * 0.4)}, ${Math.round(g * 0.4)}, ${Math.round(b * 0.4)}, 0.2)`;
 }
 
+/**
+ * Natural Earth ISO_A3 can be "-99" for disputed/unrecognised territories.
+ * Prefer ISO_A3_EH, then ADM0_A3, as fallbacks.
+ */
+function resolveIso(props: Record<string, unknown>): string {
+  const candidates = [
+    props.ISO_A3 as string,
+    props.ISO_A3_EH as string,
+    props.ADM0_A3 as string,
+  ];
+  return candidates.find((c) => c && c !== "-99") ?? "-99";
+}
+
+function resolveName(props: Record<string, unknown>): string {
+  return (
+    (props.NAME as string) ||
+    (props.ADMIN as string) ||
+    (props.NAME_LONG as string) ||
+    resolveIso(props)
+  );
+}
+
 interface CrisisFeature {
   type: string;
   properties: Record<string, unknown>;
   geometry: Record<string, unknown>;
   __severity: number;
   __hasCrisis: boolean;
+  __iso: string;   // resolved, never -99
+  __name: string;
 }
 
 export default function GlobeView() {
@@ -88,7 +110,7 @@ export default function GlobeView() {
   const [geoReady, setGeoReady] = useState(false);
   const [hoveredIso, setHoveredIso] = useState<string | null>(null);
 
-  const { selectedCountry, flyToCoordinates, comparisonData, viewMode, filters } =
+  const { selectedCountry, isSpotlightActive, flyToCoordinates, comparisonData, viewMode, filters, setNearestSpotlightIso } =
     useGlobeContext();
 
   // Fetch crisis data when year/month filters change
@@ -133,8 +155,9 @@ export default function GlobeView() {
     return map;
   }, [data]);
 
-  // When flyToCoordinates is set, find the nearest country ISO to spotlight
-  const spotlightIso = useMemo(() => {
+  // When flyToCoordinates changes, find nearest crisis country to spotlight.
+  // Only applied when isSpotlightActive is true (set false on reset_view).
+  const nearestIso = useMemo(() => {
     if (!flyToCoordinates) return null;
     let bestIso: string | null = null;
     let bestDist = Infinity;
@@ -150,18 +173,36 @@ export default function GlobeView() {
     return bestIso;
   }, [flyToCoordinates, countryMetrics]);
 
-  // Merge GeoJSON features with crisis severity data
+  // Spotlight: hover always takes priority; voice-nav spotlight only when explicitly active
+  const spotlightIso = isSpotlightActive ? nearestIso : null;
+
+  // Sync nearestIso into context so VoiceChatContext can use it for reports
+  useEffect(() => {
+    setNearestSpotlightIso(nearestIso);
+  }, [nearestIso]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Merge GeoJSON features with crisis severity data.
+  // Countries without real crisis data get a stable random low severity (1.0–1.5)
+  // so they still render with a dim blue tint instead of being invisible.
+  // Features whose ISO resolves to -99 (disputed/unrecognised territories) are dropped.
   const polygonFeatures = useMemo((): CrisisFeature[] => {
     if (!geoJsonRef.current) return [];
-    return geoJsonRef.current.map((feat) => {
-      const iso = feat.properties.ISO_A3 as string;
-      const metrics = countryMetrics.get(iso);
-      return {
-        ...feat,
-        __severity: metrics?.severity ?? 0,
-        __hasCrisis: metrics !== undefined,
-      };
-    });
+    return geoJsonRef.current
+      .map((feat) => {
+        const iso = resolveIso(feat.properties);
+        if (iso === "-99") return null;  // drop unrecognised territories
+        const name = resolveName(feat.properties);
+        const metrics = countryMetrics.get(iso);
+        if (metrics) {
+          return { ...feat, __severity: metrics.severity, __hasCrisis: true, __iso: iso, __name: name };
+        }
+        // Stable hash so colour doesn't flicker on re-renders
+        let hash = 0;
+        for (let k = 0; k < iso.length; k++) hash = (hash * 31 + iso.charCodeAt(k)) >>> 0;
+        const fakeSeverity = 1.0 + (hash % 100) / 200; // 1.0 – 1.5
+        return { ...feat, __severity: fakeSeverity, __hasCrisis: false, __iso: iso, __name: name };
+      })
+      .filter((f): f is CrisisFeature => f !== null);
   }, [countryMetrics, geoReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Globe init
@@ -211,29 +252,36 @@ export default function GlobeView() {
       .polygonsData(polygonFeatures)
       .polygonAltitude((d) => {
         const feat = d as CrisisFeature;
-        const iso = feat.properties.ISO_A3 as string;
-        if (!feat.__hasCrisis) return 0.005;
-        if (spotlight && iso !== spotlight) return 0.005;
+        if (!feat.__hasCrisis) {
+          // Give non-crisis countries a visible raised base so they look 3D
+          let hash = 0;
+          for (let k = 0; k < feat.__iso.length; k++) hash = (hash * 31 + feat.__iso.charCodeAt(k)) >>> 0;
+          return 0.04 + (hash % 100) / 5000; // ~0.04 – 0.06
+        }
+        if (spotlight && feat.__iso !== spotlight) return 0.04;
         return 0.02 + severityToT(feat.__severity) * 0.28;
       })
       .polygonCapColor((d) => {
         const feat = d as CrisisFeature;
-        const iso = feat.properties.ISO_A3 as string;
-        if (!feat.__hasCrisis) return NEUTRAL_CAP;
-        if (spotlight && iso !== spotlight) return DIMMED_CAP;
+        if (spotlight && feat.__iso !== spotlight) return DIMMED_CAP;
+        if (!feat.__hasCrisis) {
+          const [r, g, b] = sampleGradient(severityToT(feat.__severity));
+          return `rgba(${r}, ${g}, ${b}, 0.55)`;
+        }
         return capColor(feat.__severity);
       })
       .polygonSideColor((d) => {
         const feat = d as CrisisFeature;
-        const iso = feat.properties.ISO_A3 as string;
-        if (!feat.__hasCrisis) return NEUTRAL_SIDE;
-        if (spotlight && iso !== spotlight) return DIMMED_SIDE;
+        if (spotlight && feat.__iso !== spotlight) return DIMMED_SIDE;
+        if (!feat.__hasCrisis) {
+          const [r, g, b] = sampleGradient(severityToT(feat.__severity));
+          return `rgba(${Math.round(r * 0.4)}, ${Math.round(g * 0.4)}, ${Math.round(b * 0.4)}, 0.08)`;
+        }
         return sideColor(feat.__severity);
       })
       .polygonStrokeColor((d) => {
         const feat = d as CrisisFeature;
-        const iso = feat.properties.ISO_A3 as string;
-        if (spotlight && iso !== spotlight) return "rgba(255, 255, 255, 0.08)";
+        if (spotlight && feat.__iso !== spotlight) return "rgba(255, 255, 255, 0.08)";
         return "rgba(255, 255, 255, 0.25)";
       })
       .polygonsTransitionDuration(300)
@@ -243,11 +291,7 @@ export default function GlobeView() {
           return;
         }
         const feat = poly as CrisisFeature;
-        if (feat.__hasCrisis) {
-          setHoveredIso(feat.properties.ISO_A3 as string);
-        } else {
-          setHoveredIso(null);
-        }
+        setHoveredIso(feat.__iso);
       })
       .polygonLabel(() => "")
       .enablePointerInteraction(true);
@@ -277,7 +321,7 @@ export default function GlobeView() {
     } else {
       globe.arcsData([]);
     }
-  }, [polygonFeatures, comparisonData, viewMode, spotlightIso, hoveredIso, countryMetrics]);
+  }, [polygonFeatures, comparisonData, viewMode, spotlightIso, hoveredIso]);
 
   // Camera: fly to coordinates from context
   useEffect(() => {
@@ -296,26 +340,77 @@ export default function GlobeView() {
   // Look up hovered country info for the tooltip
   const hoveredInfo = useMemo(() => {
     if (!hoveredIso) return null;
-    const feat = polygonFeatures.find((f) => f.properties.ISO_A3 === hoveredIso);
-    if (!feat || !feat.__hasCrisis) return null;
+    const feat = polygonFeatures.find((f) => f.__iso === hoveredIso);
+    if (!feat) return null;
     const metrics = countryMetrics.get(hoveredIso);
     return {
-      name: (feat.properties.NAME as string) ?? hoveredIso,
-      iso: hoveredIso,
-      severity: metrics?.severity ?? 0,
+      name: feat.__name,
+      iso: feat.__iso,
+      severity: metrics?.severity ?? null,  // null = no real crisis data
     };
   }, [hoveredIso, polygonFeatures, countryMetrics]);
 
   return (
     <div className="relative w-full h-screen">
       <div ref={containerRef} className="w-full h-full" />
-      {/* Hovered country tooltip -- bottom right corner */}
-      {hoveredInfo && (
-        <div className="absolute bottom-4 right-4 rounded-lg border border-[#00d4ff]/30 bg-[#1a1d21]/90 px-4 py-3 text-sm text-white/90 backdrop-blur-sm">
-          <div className="font-semibold text-[#00e5ff]">{hoveredInfo.name} ({hoveredInfo.iso})</div>
-          <div className="text-xs text-white/60 mt-1">Severity: {hoveredInfo.severity.toFixed(1)}</div>
+
+      {/* ── Legend ──────────────────────────────────────────────────── */}
+      <div
+        className="absolute bottom-4 left-4 rounded-xl border border-white/10 bg-[#0d0f12]/80 px-4 py-3 backdrop-blur-md"
+        style={{ minWidth: 180 }}
+      >
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-white/40 mb-2">
+          Legend
+        </p>
+
+        {/* Color gradient bar */}
+        <div className="mb-1">
+          <p className="text-[11px] text-white/70 mb-1 font-medium">Crisis Severity</p>
+          <div
+            className="h-3 w-full rounded-full"
+            style={{
+              background:
+                "linear-gradient(to right, rgb(30,100,240), rgb(0,200,210), rgb(40,210,80), rgb(240,200,0), rgb(250,120,20), rgb(230,40,40))",
+            }}
+          />
+          <div className="flex justify-between text-[10px] text-white/40 mt-0.5">
+            <span>1 – Low</span>
+            <span>5 – Critical</span>
+          </div>
         </div>
-      )}
+
+        {/* Height encoding */}
+        <div className="mt-2 flex items-center gap-2">
+          {/* Mini bar-height icon */}
+          <div className="flex items-end gap-[3px] h-5">
+            {[0.35, 0.55, 0.75, 1].map((h, i) => (
+              <div
+                key={i}
+                className="w-[5px] rounded-sm"
+                style={{
+                  height: `${h * 100}%`,
+                  background: `rgba(0,212,255,${0.4 + i * 0.15})`,
+                }}
+              />
+            ))}
+          </div>
+          <p className="text-[11px] text-white/60">
+            Bar height = severity
+          </p>
+        </div>
+      </div>
+      {/* Hovered country tooltip -- bottom right corner */}
+      {hoveredInfo && (() => {
+        const sev = hoveredInfo.severity;
+        return (
+          <div className="absolute bottom-4 right-4 rounded-lg border border-[#00d4ff]/30 bg-[#1a1d21]/90 px-4 py-3 text-sm text-white/90 backdrop-blur-sm">
+            <div className="font-semibold text-[#00e5ff]">{hoveredInfo.name} ({hoveredInfo.iso})</div>
+            <div className="text-xs text-white/60 mt-1">
+              {sev !== null ? `Severity: ${sev.toFixed(1)}` : "No active crisis"}
+            </div>
+          </div>
+        );
+      })()}
       {/* Selected country badge (from voice agent) */}
       {selectedCountry && !hoveredInfo && (
         <div className="absolute bottom-4 right-4 rounded-lg border border-[#00d4ff]/30 bg-[#1a1d21]/90 px-4 py-3 text-sm text-white/90 backdrop-blur-sm">
