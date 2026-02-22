@@ -1,5 +1,6 @@
 # backend/services/databricks_client.py
 import json
+import logging
 import os
 import httpx
 try:
@@ -17,6 +18,49 @@ DEFAULT_VECTOR_INDEX = "projects"
 
 # Global model cache for fast sentence embeddings
 _embedding_model = None
+
+logger = logging.getLogger(__name__)
+
+
+def _vector_search_demo(
+    query_text: str,
+    num_results: int = 5,
+    columns: list[str] | None = None,
+) -> list[dict]:
+    """Return demo results when Actian cortex client is not installed."""
+    default_columns = [
+        "project_id", "project_code", "project_name", "iso3", "country_name",
+        "cluster", "b2b_ratio", "cost_per_beneficiary",
+    ]
+    cols = columns or default_columns
+    # First row: synthetic match for the user's query (benchmark uses it as query_project)
+    q = (query_text or "Project").strip()[:80]
+    query_row = {
+        "project_id": "demo-query",
+        "project_code": f"DEMO-{q.replace(' ', '-')[:20]}" if q else "DEMO-QUERY",
+        "project_name": q or "Demo query project",
+        "iso3": "XXX",
+        "country_name": "Demo",
+        "cluster": "Health",
+        "b2b_ratio": 0.80,
+        "cost_per_beneficiary": 1.25,
+        "score": 1.0,
+    }
+    neighbors_demo = [
+        {"project_id": "demo-1", "project_code": "CBPF-AFG-24-001", "project_name": "Health and nutrition response", "iso3": "AFG", "country_name": "Afghanistan", "cluster": "Health", "b2b_ratio": 0.82, "cost_per_beneficiary": 1.22, "score": 0.94},
+        {"project_id": "demo-2", "project_code": "CBPF-SSY-24-002", "project_name": "Emergency food security", "iso3": "SSD", "country_name": "South Sudan", "cluster": "Food Security", "b2b_ratio": 0.78, "cost_per_beneficiary": 1.28, "score": 0.89},
+        {"project_id": "demo-3", "project_code": "CBPF-YEM-24-003", "project_name": "WASH and shelter", "iso3": "YEM", "country_name": "Yemen", "cluster": "WASH", "b2b_ratio": 0.75, "cost_per_beneficiary": 1.33, "score": 0.85},
+        {"project_id": "demo-4", "project_code": "CBPF-SOM-24-004", "project_name": "Protection and education", "iso3": "SOM", "country_name": "Somalia", "cluster": "Protection", "b2b_ratio": 0.71, "cost_per_beneficiary": 1.41, "score": 0.82},
+        {"project_id": "demo-5", "project_code": "CBPF-UKR-24-005", "project_name": "Multi-sector response", "iso3": "UKR", "country_name": "Ukraine", "cluster": "Multi-Sector", "b2b_ratio": 0.68, "cost_per_beneficiary": 1.47, "score": 0.79},
+    ]
+    full_demo = [query_row] + neighbors_demo
+    out = []
+    for row in full_demo[: num_results + 1]:  # +1 so we get query + num_results neighbors
+        if columns:
+            out.append({c: row.get(c) for c in cols} | {"score": row.get("score", 0.8)})
+        else:
+            out.append(dict(row))
+    return out
 
 async def execute_sql(statement: str, warehouse_id: str | None = None) -> list[dict]:
     """Execute SQL via EXTERNAL_LINKS disposition and return rows as list of dicts."""
@@ -96,50 +140,52 @@ async def vector_search(
     index_name: str = DEFAULT_VECTOR_INDEX,
     num_results: int = 5,
     columns: list[str] | None = None,
-) -> list[dict]:
-    """Query Actian Vector DB on Vultr by text. Returns list of result dicts."""
-    if AsyncCortexClient is None:
-        raise RuntimeError("cortex package is not installed. Install the actian-vectorAI-db-beta submodule.")
+    *,
+    return_demo_flag: bool = False,
+) -> list[dict] | tuple[list[dict], bool]:
+    """Query Actian Vector DB on Vultr by text. Returns list of result dicts.
+    Falls back to demo results when cortex client is not installed.
+    If return_demo_flag is True, returns (results, is_demo)."""
+    use_demo = os.getenv("USE_VECTOR_DEMO", "").strip().lower() in ("1", "true", "yes")
+
+    if AsyncCortexClient is None or use_demo:
+        logger.info(
+            "Vector search using demo data (cortex not installed or USE_VECTOR_DEMO=1). "
+            "For live Actian Vector DB, install the actian-vectorAI-db-beta client and set VULTR_IP."
+        )
+        demo_results = _vector_search_demo(query_text, num_results=num_results, columns=columns)
+        if return_demo_flag:
+            return (demo_results, True)
+        return demo_results
+
     if SentenceTransformer is None:
         raise RuntimeError("sentence-transformers package is not installed.")
     host = os.getenv("VULTR_IP", "155.138.211.74")
     if ":" not in host:
         host = f"{host}:50051"
-    
+
     global _embedding_model
     if _embedding_model is None:
-        _embedding_model = SentenceTransformer('all-mpnet-base-v2')
-        
-    # Generate embeddings locally
+        _embedding_model = SentenceTransformer("all-mpnet-base-v2")
+
     query_vector = _embedding_model.encode(query_text, normalize_embeddings=True).tolist()
 
-    # Query the Vultr Actian Vector DB
     async with AsyncCortexClient(host) as client:
-        results = await client.search(
-            index_name,
-            query_vector,
-            top_k=num_results
-        )
-        
+        results = await client.search(index_name, query_vector, top_k=num_results)
+
         out_rows = []
         for r in results:
-            if not getattr(r, "id", None):
-                continue
-            # Async get returns a tuple: (vector, payload)
-            try:
-                vec, payload = await client.get(index_name, r.id)
-            except Exception:
-                payload = {}
-            if payload is None:
-                payload = {}
-
+            payload = getattr(r, "payload", None) or {}
+            score = getattr(r, "score", 0.0)
             if columns:
                 row = {c: payload.get(c) for c in columns}
             else:
-                row = payload.copy()
-            row["score"] = getattr(r, "score", 0.0)
+                row = dict(payload) if payload else {}
+            row["score"] = score
             out_rows.append(row)
-            
+
+    if return_demo_flag:
+        return (out_rows, False)
     return out_rows
 
 

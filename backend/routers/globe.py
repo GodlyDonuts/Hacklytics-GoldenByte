@@ -8,7 +8,7 @@ from collections import defaultdict
 
 from fastapi import APIRouter, HTTPException, Query
 
-from services.cache import get_crises, get_projects
+from ..services.cache import get_crises, get_projects
 
 router = APIRouter()
 

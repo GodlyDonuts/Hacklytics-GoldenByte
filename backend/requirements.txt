@@ -5,7 +5,5 @@ pandas>=2.2.2
 python-dotenv==1.0.1
 google-genai==1.38.0
 markdown-pdf==1.13.1
-# Optional: needed for vector_search (Actian Vector DB)
-sentence-transformers>=3.0.0
-# Cortex client from local wheel format
-./actiancortex-0.1.0b1-py3-none-any.whl
+# Vector search: embeddings (required for live Actian DB); cortex is optional (demo used when missing)
+sentence-transformers>=2.2.0
