@@ -4,7 +4,7 @@ import React, { createContext, useContext, useState, useCallback, useEffect, use
 import { useConversation } from '@elevenlabs/react';
 import { useRouter } from 'next/navigation';
 import { useGlobeContext } from '@/context/GlobeContext';
-import { generateReport } from '@/lib/api';
+import { generateReport, getPredictiveRisks } from '@/lib/api';
 import { pushActivity, resolveActivity } from '@/components/Globe/AgentActivityFeed';
 
 const AGENT_ID = process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID || 'agent_1201khzd23t9fsaramppkhnftan0';
@@ -36,7 +36,7 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
   const [hasStarted, setHasStarted] = useState(false);
   const [textInput, setTextInput] = useState('');
   const [textError, setTextError] = useState<string | null>(null);
-  const { setFlyToCoordinates, setComparisonData, setViewMode, setGenieChartData, setSelectedCountry, setIsSpotlightActive, setFilters, nearestSpotlightIso, selectedCountry, comparisonData } = useGlobeContext();
+  const { setFlyToCoordinates, setComparisonData, setViewMode, setGenieChartData, setSelectedCountry, setIsSpotlightActive, setFilters, setPredictiveRisks, nearestSpotlightIso, selectedCountry, comparisonData } = useGlobeContext();
   const conversationRef = useRef<ReturnType<typeof useConversation> | null>(null);
 
   const globeStateRef = useRef({ selectedCountry, comparisonData });
@@ -206,6 +206,30 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
 
         resolveActivity(aid, 'done', label);
         return `Changed to ${label}`;
+      },
+      run_predictive_scan: async () => {
+        const aid = pushActivity('run_predictive_scan', 'Running intelligence scan', 'Future anomalies');
+        setViewMode('predictive-risks');
+        try {
+          const data = await getPredictiveRisks();
+          setPredictiveRisks(data.risks);
+
+          if (data.risks && data.risks.length > 0) {
+            const topRisk = data.risks.reduce((prev, current) =>
+              (prev.confidence_score > current.confidence_score) ? prev : current
+            );
+
+            resolveActivity(aid, 'done', topRisk.country_name);
+            return `I have performed a predictive intelligence scan using the Actian Vector DB. The most significant anomaly identified is in ${topRisk.country_name}, where ${topRisk.risk_title} is projected with a confidence of ${Math.round(topRisk.confidence_score * 100)} percent. ${topRisk.risk_description}`;
+          } else {
+            resolveActivity(aid, 'done', 'No risks found');
+            return "Scan complete. Our predictive models do not currently identify any significant future anomalies.";
+          }
+        } catch (error) {
+          console.error('Predictive scan failed:', error);
+          resolveActivity(aid, 'error', 'Analysis failed');
+          return "I apologize, but I encountered an error while accessing the predictive models.";
+        }
       },
       reset_view: (parameters: {}) => {
         const aid = pushActivity('reset_view', 'Resetting view');

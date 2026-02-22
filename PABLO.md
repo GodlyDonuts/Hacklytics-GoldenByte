@@ -81,3 +81,17 @@ Pablo is the interactive ElevenLabs voice agent powering the Crisis Topography C
        ]
      }
      ```
+
+8. **`run_predictive_scan`**
+   - **Description**: Triggers a global intelligence scan to identify future crisis risks using the Actian Vector DB.
+   - **Usage**: "Pablo, scan for future anomalies" or "Run a predictive intelligence scan."
+   - **Action**: 
+     - Switches the globe to predictive mode.
+     - Fetches high-confidence risks from the vector database.
+     - Narrates the top identified anomaly.
+   - **Configuration (ElevenLabs JSON)**:
+     ```json
+     {
+       "parameters": []
+     }
+     ```
