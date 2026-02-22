@@ -10,23 +10,39 @@ visualization feature. Pause between commands to let animations and data load.
 
 > "Show me the global crisis landscape."
 
-The globe loads in **Severity mode** by default, coloring countries by ACAPS crisis
-severity scores. Red/orange = high severity, blue/green = lower severity. Polygon
-altitude encodes the same metric so the worst-hit regions literally rise off the globe.
+The globe loads in **Severity mode** showing **January 2024** by default. Countries
+are colored by ACAPS crisis severity scores: red/orange = high severity, blue/green =
+lower severity. Polygon altitude encodes the same metric so the worst-hit regions
+literally rise off the globe. The current time period is displayed as a read-only
+indicator in the top left corner.
 
 ---
 
-## 2. Navigate to a Country
+## 2. Change the Time Period
+
+> "Show me March 2024."
+
+The time indicator updates to **Mar 2024** and the globe reloads with month-specific
+crisis data. The voice agent can navigate to any month between 2022 and 2026.
+
+> "Go to 2025."
+
+Switches to 2025, keeping the current month.
+
+---
+
+## 3. Navigate to a Country
 
 > "Take me to Yemen."
 
 The camera flies to Yemen and activates the spotlight, dimming all other countries.
-Clicking the country opens the **Country Detail Overlay** on the right showing every
+Clicking any country on the globe also rotates to center on it. Clicking a country
+with crisis data opens the **Country Detail Overlay** on the right showing every
 active crisis, funding gaps, and severity badges.
 
 ---
 
-## 3. Drill into Project-Level Data
+## 4. Drill into Project-Level Data
 
 After the overlay opens, expand the **Project-Level B2B Analysis** section manually
 (or narrate it). This calls `GET /api/globe/b2b` and shows per-project
@@ -37,7 +53,7 @@ budget-to-beneficiary ratios, outlier flags, and cluster medians.
 
 ---
 
-## 4. Benchmark a Project
+## 5. Benchmark a Project
 
 Click **Find comparable projects** on any project card. This calls
 `POST /api/benchmark` and returns semantically similar projects from other countries,
@@ -48,12 +64,13 @@ ranked by B2B delta.
 
 ---
 
-## 5. Switch View Modes
+## 6. Switch View Modes
 
 > "Switch to the funding gap view."
 
 The globe recolors: green = well-funded, red = large unmet funding needs. Altitude
-now encodes the coverage gap ratio.
+now encodes the coverage gap ratio. Switching modes resets the selected country and
+any active comparisons for a clean view.
 
 > "Now show me the overlooked crises view."
 
@@ -62,7 +79,20 @@ disproportionately less attention relative to their severity.
 
 ---
 
-## 6. Compare Two Countries
+## 7. Predictive Risk Analysis
+
+Click the **Predictive Risks** button in the top nav bar. The globe queries
+`GET /api/predictive/risks`, which uses Databricks anomaly scores and an LLM to
+predict geopolitical risks such as mass migration, famine, or civil unrest. Pulsing
+red markers appear at affected countries -- hover over them to see risk details,
+confidence scores, and contributing factors.
+
+> "The predictive layer flags countries where anomalous funding patterns may signal
+> deeper systemic failures -- corruption, extreme desperation, or imminent collapse."
+
+---
+
+## 8. Compare Two Countries
 
 > "Compare Syria and Sudan."
 
@@ -72,7 +102,7 @@ and funding gaps.
 
 ---
 
-## 7. Natural Language Data Query (Genie)
+## 9. Natural Language Data Query (Genie)
 
 > "Which countries have the highest number of people in need?"
 
@@ -90,34 +120,21 @@ Follow-up queries to try:
 
 ---
 
-## 8. RAG-Powered Q&A
+## 10. RAG-Powered Q&A
 
-This one is triggered via the text-based `/ask` endpoint (not directly exposed as a
-voice tool, but can be demoed from the API or a separate UI). It vector-searches the
-crisis knowledge base and generates a grounded answer with source citations.
+This is triggered via the `/ask` endpoint (not directly exposed as a voice tool,
+but can be demoed from the API or a separate UI). It vector-searches the crisis
+knowledge base using Actian Vector DB and generates a grounded answer with source
+citations.
 
 Example question for the API:
 > "What are the main drivers of food insecurity in the Sahel region?"
 
----
-
-## 9. Predictive Risk Analysis
-
-This endpoint is not voice-triggered but can be demoed via the API or a dedicated UI
-panel. It queries Databricks for projects with anomaly scores above 0.8, groups them
-by country, and sends the anomalies to an LLM (Qwen 3.5 via OpenRouter) to predict
-geopolitical risks such as mass migration, famine, or civil unrest.
-
-Call `GET /api/predictive/risks` to receive a structured list of risks per country,
-each with a severity level, confidence score, and contributing factors drawn from
-the actual anomaly data.
-
-> "The predictive layer flags countries where anomalous funding patterns may signal
-> deeper systemic failures -- corruption, extreme desperation, or imminent collapse."
+Note: requires the `actiancortex` package and a running Actian Vector DB instance.
 
 ---
 
-## 10. Generate a Report
+## 11. Generate a Report
 
 > "Generate a report on Yemen."
 
@@ -132,7 +149,7 @@ funding gaps worldwide with analysis.
 
 ---
 
-## 11. Reset and Wrap Up
+## 12. Reset and Wrap Up
 
 > "Reset the view."
 
@@ -150,6 +167,7 @@ Gracefully terminates the voice session.
 | Command | What It Does | Backend Endpoint |
 |---------|-------------|-----------------|
 | "Take me to [country]" | Fly camera to location | Client-side only |
+| "Show me [month] [year]" | Change time period | Client-side only |
 | "Switch to [severity/funding gap/overlooked] view" | Change color mode | Client-side only |
 | "Compare [country A] and [country B]" | Draw arc, show stats | Client-side only |
 | "Which countries have the highest [metric]?" | NL-to-SQL query | POST /api/genie |
@@ -170,3 +188,6 @@ Gracefully terminates the voice session.
 - The country detail overlay loads B2B data lazily -- expand the section to trigger
   the API call.
 - For the benchmark feature, pick a project with an outlier flag for maximum impact.
+- Clicking any country (with or without crisis data) rotates the globe to center
+  on it. Countries without crisis data will not open the detail overlay.
+- Year/month navigation is voice-only -- there are no clickable controls on the globe.
