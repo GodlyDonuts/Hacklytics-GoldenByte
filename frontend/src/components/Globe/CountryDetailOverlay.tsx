@@ -318,8 +318,10 @@ export default function CountryDetailOverlay({ countries }: CountryDetailOverlay
   if (!country) return null;
 
   const crises = country.crises ?? [];
-  const totalPeopleInNeed = crises.reduce((s, c) => s + (c.people_in_need ?? 0), 0);
-  const totalGap = crises.reduce((s, c) => s + (c.funding_gap_usd ?? 0), 0);
+  // people_in_need and funding_gap_usd are country-level metrics duplicated
+  // across every crisis row; use max to de-duplicate instead of summing
+  const totalPeopleInNeed = Math.max(0, ...crises.map((c) => c.people_in_need ?? 0));
+  const totalGap = Math.max(0, ...crises.map((c) => c.funding_gap_usd ?? 0));
   const outlierProjects = projects.filter((p) => p.is_outlier);
 
   return (

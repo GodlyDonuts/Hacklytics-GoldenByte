@@ -48,9 +48,12 @@ async def get_globe_crises(
 
     rows = get_crises(year, month)
 
-    # Group by country (iso3)
+    # Group by country (iso3), deduplicating crises by crisis_id.
+    # When viewing a full year (month=None), crisis_summary has one row
+    # per crisis per month. Keep the latest month's snapshot per crisis.
     by_country: dict[str, list] = defaultdict(list)
-    for r in rows:
+    seen_crises: dict[tuple[str, str], dict] = {}  # (iso3, crisis_id) -> crisis dict
+    for r in sorted(rows, key=lambda r: r.get("month") or 0):
         iso3 = r.get("iso3") or r.get("location_code") or ""
         if not iso3:
             continue
@@ -58,14 +61,31 @@ async def get_globe_crises(
             "crisis_id": r.get("crisis_id"),
             "crisis_name": r.get("crisis_name"),
             "acaps_severity": _float(r.get("acaps_severity")),
+            "severity_class": r.get("severity_class"),
+            "has_hrp": _bool(r.get("has_hrp")),
+            "appeal_type": r.get("appeal_type"),
+            "funding_state": r.get("funding_state"),
             "people_in_need": _int(r.get("people_in_need")),
             "target_beneficiaries": _int(r.get("target_beneficiaries")),
             "funding_usd": _float(r.get("funding_usd")),
+            "funding_gap_usd": _float(r.get("funding_gap_usd")),
+            "funding_coverage_pct": _pct(r.get("funding_coverage_pct")),
             "coverage_ratio": _float(r.get("coverage_ratio")),
             "oversight_score": _float(r.get("oversight_score")),
             "b2b_ratio": _float(r.get("b2b_ratio")),
+            "crisis_rank": _int(r.get("crisis_rank")),
         }
-        by_country[iso3].append(crisis)
+        cid = crisis.get("crisis_id") or ""
+        key = (iso3, cid)
+        # Latest month wins (rows sorted ascending by month)
+        seen_crises[key] = (iso3, crisis)
+
+    for (_iso3, _cid), (country_iso, crisis) in seen_crises.items():
+        by_country[country_iso].append(crisis)
+
+    # Sort crises by rank (most severe first)
+    for iso3 in by_country:
+        by_country[iso3].sort(key=lambda c: c.get("crisis_rank") or 999)
 
     countries = []
     seen = set()
@@ -152,6 +172,14 @@ def _float(v) -> float | None:
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+def _pct(v) -> float | None:
+    """Convert a 0-1 ratio to a 0-100 percentage."""
+    f = _float(v)
+    if f is None:
+        return None
+    return round(f * 100, 1)
 
 
 def _int(v) -> int | None:
