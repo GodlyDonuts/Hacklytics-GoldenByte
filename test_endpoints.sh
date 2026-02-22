@@ -115,6 +115,12 @@ check "POST /benchmark" \
     '{"project_code":"HSDN24-CSS-209320-1","num_neighbors":3}'
 
 echo ""
+echo "--- Predictive ---"
+check "GET  /predictive/risks" \
+    GET "/api/predictive/risks" "" \
+    "'risks' in d"
+
+echo ""
 echo "--- Report ---"
 check "GET  /report" \
     GET "/report"
