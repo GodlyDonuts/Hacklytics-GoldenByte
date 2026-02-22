@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import httpx
 
-from ..services.databricks_client import execute_sql
+from services.databricks_client import execute_sql
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

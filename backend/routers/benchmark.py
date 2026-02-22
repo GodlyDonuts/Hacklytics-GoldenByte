@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..services.databricks_client import vector_search
+from services.databricks_client import vector_search
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

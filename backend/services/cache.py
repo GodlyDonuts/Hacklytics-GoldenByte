@@ -23,7 +23,7 @@ _projects_by_iso3_year: dict[tuple[str, int], list[dict]] = {}
 
 async def warm_cache() -> None:
     """Load crisis_summary and project_embeddings into memory."""
-    from .databricks_client import execute_sql
+    from services.databricks_client import execute_sql
 
     for table in ("crisis_summary", "project_embeddings"):
         try:
