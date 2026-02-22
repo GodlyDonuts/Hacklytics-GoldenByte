@@ -22,7 +22,15 @@ interface GlobeControlsProps {
 
 export default function GlobeControls({ globeRef }: GlobeControlsProps) {
   const [autoRotate, setAutoRotate] = useState(false);
-  const { viewMode, setViewMode } = useGlobeContext();
+  const { viewMode, setViewMode, setSelectedCountry, setComparisonData, setGenieChartData, setIsSpotlightActive } = useGlobeContext();
+
+  const handleModeChange = useCallback((mode: typeof viewMode) => {
+    setViewMode(mode);
+    setSelectedCountry(null);
+    setComparisonData(null);
+    setGenieChartData(null);
+    setIsSpotlightActive(false);
+  }, [setViewMode, setSelectedCountry, setComparisonData, setGenieChartData, setIsSpotlightActive]);
 
   const handleZoomIn = useCallback(() => {
     const g = globeRef.current;
@@ -57,7 +65,7 @@ export default function GlobeControls({ globeRef }: GlobeControlsProps) {
           <button
             key={m.key}
             type="button"
-            onClick={() => setViewMode(m.key)}
+            onClick={() => handleModeChange(m.key)}
             title={m.desc}
             className={`px-5 py-2.5 rounded-lg text-sm font-medium transition-all ${
               viewMode === m.key

@@ -354,9 +354,37 @@ export default function GlobeView() {
       .onPolygonClick((poly) => {
         if (!poly) return;
         const feat = poly as CrisisFeature;
+        const iso = feat.properties.ISO_A3 as string;
         if (feat.__hasCrisis) {
-          const iso = feat.properties.ISO_A3 as string;
           setSelectedCountry(iso);
+        }
+        const metrics = countryMetrics.get(iso);
+        if (metrics && globeRef.current) {
+          globeRef.current.pointOfView(
+            { lat: metrics.lat, lng: metrics.lng, altitude: 1.5 },
+            1500
+          );
+        } else if (globeRef.current) {
+          // Compute centroid from GeoJSON geometry for countries without crisis data
+          const geom = feat.geometry as { type: string; coordinates: number[][][] | number[][][][] };
+          let sumLat = 0, sumLng = 0, count = 0;
+          const rings = geom.type === 'MultiPolygon'
+            ? (geom.coordinates as number[][][][]).map(p => p[0])
+            : [((geom.coordinates as number[][][])[0])];
+          for (const ring of rings) {
+            if (!ring) continue;
+            for (const coord of ring) {
+              sumLng += coord[0];
+              sumLat += coord[1];
+              count++;
+            }
+          }
+          if (count > 0) {
+            globeRef.current.pointOfView(
+              { lat: sumLat / count, lng: sumLng / count, altitude: 1.5 },
+              1500
+            );
+          }
         }
       })
       .enablePointerInteraction(true);
