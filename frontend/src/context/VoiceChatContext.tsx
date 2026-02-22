@@ -36,7 +36,7 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
   const [hasStarted, setHasStarted] = useState(false);
   const [textInput, setTextInput] = useState('');
   const [textError, setTextError] = useState<string | null>(null);
-  const { setFlyToCoordinates, setComparisonData, setViewMode, setGenieChartData, setSelectedCountry, setIsSpotlightActive, setFilters, nearestSpotlightIso, selectedCountry, comparisonData } = useGlobeContext();
+  const { setFlyToCoordinates, setComparisonData, setViewMode, setGenieChartData, setAskResult, setSelectedCountry, setIsSpotlightActive, setFilters, nearestSpotlightIso, selectedCountry, comparisonData } = useGlobeContext();
   const conversationRef = useRef<ReturnType<typeof useConversation> | null>(null);
 
   const globeStateRef = useRef({ selectedCountry, comparisonData });
@@ -111,7 +111,7 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
         const aid = pushActivity('query_data', 'Querying Databricks', parameters.question);
         try {
           const resp = await fetch(
-            `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/genie`,
+            `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/ask`,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -123,16 +123,14 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
             return `Query failed: HTTP ${resp.status}`;
           }
           const data = await resp.json();
-          setGenieChartData({
+          setGenieChartData(null);
+          setAskResult({
             question: parameters.question,
-            columns: data.columns || [],
-            rows: data.rows || [],
-            description: data.description,
-            sql: data.sql,
+            answer: data.answer ?? '',
+            sources: data.sources ?? [],
           });
-          const rowCount = (data.rows || []).length;
-          resolveActivity(aid, 'done', `${rowCount} result${rowCount !== 1 ? 's' : ''} returned`);
-          return data.description || 'Query completed. Results are displayed on screen.';
+          resolveActivity(aid, 'done', 'Answer displayed');
+          return data.answer ?? 'Query completed. Results are displayed on screen.';
         } catch (err) {
           resolveActivity(aid, 'error', err instanceof Error ? err.message : 'Failed');
           return `Query failed: ${err instanceof Error ? err.message : String(err)}`;
@@ -194,6 +192,7 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
         setViewMode('severity');
         setComparisonData(null);
         setGenieChartData(null);
+        setAskResult(null);
         setSelectedCountry(null);
         setIsSpotlightActive(false);
         lastNavigatedIso3Ref.current = null;

@@ -15,7 +15,7 @@ export default function QueryBar() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { setGenieChartData } = useGlobeContext();
+  const { setGenieChartData, setAskResult } = useGlobeContext();
 
   const handleSubmit = useCallback(async () => {
     const q = input.trim();
@@ -24,6 +24,7 @@ export default function QueryBar() {
     setError(null);
     try {
       const result = await queryGenie(q);
+      setAskResult(null);
       setGenieChartData({
         question: q,
         columns: result.columns ?? [],
@@ -37,7 +38,7 @@ export default function QueryBar() {
     } finally {
       setLoading(false);
     }
-  }, [input, loading, setGenieChartData]);
+  }, [input, loading, setGenieChartData, setAskResult]);
 
   return (
     <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20 w-full max-w-lg px-4">

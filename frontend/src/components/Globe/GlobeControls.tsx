@@ -22,15 +22,16 @@ interface GlobeControlsProps {
 
 export default function GlobeControls({ globeRef }: GlobeControlsProps) {
   const [autoRotate, setAutoRotate] = useState(false);
-  const { viewMode, setViewMode, setSelectedCountry, setComparisonData, setGenieChartData, setIsSpotlightActive } = useGlobeContext();
+  const { viewMode, setViewMode, setSelectedCountry, setComparisonData, setGenieChartData, setAskResult, setIsSpotlightActive } = useGlobeContext();
 
   const handleModeChange = useCallback((mode: typeof viewMode) => {
     setViewMode(mode);
     setSelectedCountry(null);
     setComparisonData(null);
     setGenieChartData(null);
+    setAskResult(null);
     setIsSpotlightActive(false);
-  }, [setViewMode, setSelectedCountry, setComparisonData, setGenieChartData, setIsSpotlightActive]);
+  }, [setViewMode, setSelectedCountry, setComparisonData, setGenieChartData, setAskResult, setIsSpotlightActive]);
 
   const handleZoomIn = useCallback(() => {
     const g = globeRef.current;

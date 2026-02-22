@@ -19,7 +19,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
-import { useGlobeContext, type GenieChartData } from "@/context/GlobeContext";
+import { useGlobeContext, type GenieChartData, type AskResult } from "@/context/GlobeContext";
 
 /** Gradient palette -- each entry is [barColor, glowColor] */
 const BAR_GRADIENTS = [
@@ -128,14 +128,80 @@ function ChartTooltip({ active, payload, label }: {
   );
 }
 
+/** RAG answer + sources view (from /api/ask) */
+function AskResultView({
+  askResult,
+  onClose,
+}: {
+  askResult: AskResult;
+  onClose: () => void;
+}) {
+  const { question, answer, sources } = askResult;
+  return (
+    <div className="absolute top-4 left-4 z-30 w-[460px] max-h-[calc(100vh-2rem)] flex flex-col rounded-2xl border border-white/[0.08] bg-[#0a0e14]/90 backdrop-blur-xl shadow-2xl overflow-hidden">
+      <div className="px-5 pt-5 pb-4 border-b border-white/[0.06]">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-1.5 h-1.5 rounded-full bg-[#00e5a0] animate-pulse" />
+              <p className="text-xs text-[#00e5a0]/80 font-semibold tracking-[0.15em] uppercase">
+                Vector search answer
+              </p>
+            </div>
+            <p className="text-sm text-white/90 leading-snug font-medium" title={question}>
+              {question}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="shrink-0 mt-0.5 w-6 h-6 flex items-center justify-center rounded-md text-white/30 hover:text-white/80 hover:bg-white/10 transition-all"
+            aria-label="Close panel"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 custom-scrollbar">
+        <p className="text-sm text-white/85 leading-relaxed whitespace-pre-wrap">{answer}</p>
+        {sources.length > 0 && (
+          <div>
+            <p className="text-xs text-white/40 font-semibold tracking-wide uppercase mb-2">Sources</p>
+            <ul className="space-y-1.5">
+              {sources.map((s, i) => (
+                <li
+                  key={s.id ?? i}
+                  className="text-xs text-white/50 flex items-center gap-2"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-white/30 shrink-0" />
+                  {s.country_name ?? s.location_code ?? s.id ?? `Source ${i + 1}`}
+                  {s.location_code && s.country_name !== s.location_code && (
+                    <span className="text-white/30 font-mono">({s.location_code})</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function GenieChartPanel() {
-  const { genieChartData, setGenieChartData } = useGlobeContext();
+  const { genieChartData, setGenieChartData, askResult, setAskResult } = useGlobeContext();
   const [showSql, setShowSql] = useState(false);
 
   const chartSpec = useMemo(() => {
     if (!genieChartData) return null;
     return detectChart(genieChartData);
   }, [genieChartData]);
+
+  if (askResult) {
+    return <AskResultView askResult={askResult} onClose={() => setAskResult(null)} />;
+  }
 
   if (!genieChartData) return null;
 

@@ -1,66 +1,104 @@
 # backend/services/databricks_client.py
+"""Databricks-only client: Vector Search, SQL, and LLM.
+
+For Actian/Vultr vector search, use services.actiandb_client instead.
+"""
 import json
 import logging
 import os
 import httpx
-try:
-    from sentence_transformers import SentenceTransformer
-except ImportError:
-    SentenceTransformer = None
-
-try:
-    from cortex import AsyncCortexClient
-except ImportError:
-    AsyncCortexClient = None
 
 # Default vector search index (from REFACTOR_PLAN)
 DEFAULT_VECTOR_INDEX = "projects"
 
-# Global model cache for fast sentence embeddings
-_embedding_model = None
-
 logger = logging.getLogger(__name__)
 
 
-def _vector_search_demo(
+async def vector_search_databricks(
     query_text: str,
+    index_name: str,
     num_results: int = 5,
     columns: list[str] | None = None,
+    query_type: str = "ann",
 ) -> list[dict]:
-    """Return demo results when Actian cortex client is not installed."""
-    default_columns = [
-        "project_id", "project_code", "project_name", "iso3", "country_name",
-        "cluster", "b2b_ratio", "cost_per_beneficiary",
-    ]
-    cols = columns or default_columns
-    # First row: synthetic match for the user's query (benchmark uses it as query_project)
-    q = (query_text or "Project").strip()[:80]
-    query_row = {
-        "project_id": "demo-query",
-        "project_code": f"DEMO-{q.replace(' ', '-')[:20]}" if q else "DEMO-QUERY",
-        "project_name": q or "Demo query project",
-        "iso3": "XXX",
-        "country_name": "Demo",
-        "cluster": "Health",
-        "b2b_ratio": 0.80,
-        "cost_per_beneficiary": 1.25,
-        "score": 1.0,
+    """Query Databricks Vector Search index via REST API.
+
+    Requires in Databricks:
+    - A Vector Search index (e.g. Delta Sync Index) with full name matching index_name
+      (e.g. workspace.default.rag_index or catalog.schema.rag_index).
+    - The index must have an embedding endpoint configured if you use query_text;
+      otherwise use query_vector with pre-computed embeddings.
+
+    Env: DATABRICKS_HOST, DATABRICKS_TOKEN (same as execute_sql / query_llm).
+    """
+    host = os.getenv("DATABRICKS_HOST")
+    token = os.getenv("DATABRICKS_TOKEN")
+    if not host or not token:
+        raise ValueError("DATABRICKS_HOST and DATABRICKS_TOKEN required for Databricks Vector Search")
+
+    # API: POST /api/2.0/vector-search/indexes/{index_name}/query (index_name in path, not body)
+    # See https://docs.databricks.com/api/workspace/vectorsearchindexes/queryindex
+    url = f"{host.rstrip('/')}/api/2.0/vector-search/indexes/{index_name}/query"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    # columns is required; query_type must be ANN | HYBRID | FULL_TEXT
+    body = {
+        "query_text": query_text,
+        "num_results": num_results,
+        "query_type": (query_type or "ann").upper() if query_type else "ANN",
+        "columns": columns if columns is not None else [],
     }
-    neighbors_demo = [
-        {"project_id": "demo-1", "project_code": "CBPF-AFG-24-001", "project_name": "Health and nutrition response", "iso3": "AFG", "country_name": "Afghanistan", "cluster": "Health", "b2b_ratio": 0.82, "cost_per_beneficiary": 1.22, "score": 0.94},
-        {"project_id": "demo-2", "project_code": "CBPF-SSY-24-002", "project_name": "Emergency food security", "iso3": "SSD", "country_name": "South Sudan", "cluster": "Food Security", "b2b_ratio": 0.78, "cost_per_beneficiary": 1.28, "score": 0.89},
-        {"project_id": "demo-3", "project_code": "CBPF-YEM-24-003", "project_name": "WASH and shelter", "iso3": "YEM", "country_name": "Yemen", "cluster": "WASH", "b2b_ratio": 0.75, "cost_per_beneficiary": 1.33, "score": 0.85},
-        {"project_id": "demo-4", "project_code": "CBPF-SOM-24-004", "project_name": "Protection and education", "iso3": "SOM", "country_name": "Somalia", "cluster": "Protection", "b2b_ratio": 0.71, "cost_per_beneficiary": 1.41, "score": 0.82},
-        {"project_id": "demo-5", "project_code": "CBPF-UKR-24-005", "project_name": "Multi-sector response", "iso3": "UKR", "country_name": "Ukraine", "cluster": "Multi-Sector", "b2b_ratio": 0.68, "cost_per_beneficiary": 1.47, "score": 0.79},
-    ]
-    full_demo = [query_row] + neighbors_demo
-    out = []
-    for row in full_demo[: num_results + 1]:  # +1 so we get query + num_results neighbors
-        if columns:
-            out.append({c: row.get(c) for c in cols} | {"score": row.get("score", 0.8)})
-        else:
-            out.append(dict(row))
-    return out
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(url, headers=headers, json=body)
+        if resp.status_code == 400:
+            err = resp.text
+            try:
+                err_json = resp.json()
+                err = err_json.get("error", err_json.get("message", err))
+            except Exception:
+                pass
+            raise ValueError(f"Databricks Vector Search 400: {err}")
+        if resp.status_code == 404:
+            raise ValueError(
+                f"Databricks Vector Search index not found: {index_name}. "
+                "Create the index in Databricks (Vector Search UI or SDK) and use its full name (catalog.schema.index_name)."
+            )
+        resp.raise_for_status()
+        data = resp.json()
+
+    # Response shape: see docs.databricks.com/api/workspace/vectorsearchindexes/queryindex
+    # Typically result.rows (list of objects) or result with data_array + manifest schema
+    result = data.get("result") or data.get("results")
+    if result is None:
+        return []
+
+    rows = result.get("rows")
+    if rows is not None:
+        # List of row objects; ensure score is included if returned
+        out = []
+        for r in rows:
+            if isinstance(r, dict):
+                out.append(dict(r))
+            else:
+                out.append({"score": 0.0, "row": r})
+        return out
+
+    data_array = result.get("data_array")
+    manifest = data.get("manifest") or result.get("manifest")
+    if data_array is not None:
+        # Official response: manifest.columns = [ {"name": "id"}, ... ], result.data_array = [ [row], ... ]
+        col_names = None
+        if manifest is not None:
+            cols = manifest.get("columns") or manifest.get("schema", {}).get("columns") or []
+            col_names = [c.get("name") for c in cols if c.get("name")]
+        if col_names and len(col_names) > 0:
+            return [dict(zip(col_names, row)) for row in data_array]
+        # No manifest or empty columns; return rows with generic keys
+        return [dict(zip([f"col_{i}" for i in range(len(row))], row)) for row in data_array]
+
+    return []
+
+
 
 async def execute_sql(statement: str, warehouse_id: str | None = None) -> list[dict]:
     """Execute SQL via EXTERNAL_LINKS disposition and return rows as list of dicts."""
@@ -137,56 +175,31 @@ async def execute_sql(statement: str, warehouse_id: str | None = None) -> list[d
 
 async def vector_search(
     query_text: str,
-    index_name: str = DEFAULT_VECTOR_INDEX,
+    index_name: str | None = None,
     num_results: int = 5,
     columns: list[str] | None = None,
     *,
     return_demo_flag: bool = False,
+    query_type: str = "ann",
 ) -> list[dict] | tuple[list[dict], bool]:
-    """Query Actian Vector DB on Vultr by text. Returns list of result dicts.
-    Falls back to demo results when cortex client is not installed.
-    If return_demo_flag is True, returns (results, is_demo)."""
-    use_demo = os.getenv("USE_VECTOR_DEMO", "").strip().lower() in ("1", "true", "yes")
+    """Query Databricks Vector Search only.
 
-    if AsyncCortexClient is None or use_demo:
-        logger.info(
-            "Vector search using demo data (cortex not installed or USE_VECTOR_DEMO=1). "
-            "For live Actian Vector DB, install the actian-vectorAI-db-beta client and set VULTR_IP."
-        )
-        demo_results = _vector_search_demo(query_text, num_results=num_results, columns=columns)
-        if return_demo_flag:
-            return (demo_results, True)
-        return demo_results
+    Requires DATABRICKS_HOST and DATABRICKS_TOKEN. Uses index_name if provided,
+    else env DATABRICKS_VECTOR_INDEX or default workspace.default.project_embeddings_index.
 
-    if SentenceTransformer is None:
-        raise RuntimeError("sentence-transformers package is not installed.")
-    host = os.getenv("VULTR_IP", "155.138.211.74")
-    if ":" not in host:
-        host = f"{host}:50051"
-
-    global _embedding_model
-    if _embedding_model is None:
-        _embedding_model = SentenceTransformer("all-mpnet-base-v2")
-
-    query_vector = _embedding_model.encode(query_text, normalize_embeddings=True).tolist()
-
-    async with AsyncCortexClient(host) as client:
-        results = await client.search(index_name, query_vector, top_k=num_results)
-
-        out_rows = []
-        for r in results:
-            payload = getattr(r, "payload", None) or {}
-            score = getattr(r, "score", 0.0)
-            if columns:
-                row = {c: payload.get(c) for c in columns}
-            else:
-                row = dict(payload) if payload else {}
-            row["score"] = score
-            out_rows.append(row)
-
+    For Actian/Vultr vector search use services.actiandb_client.vector_search_actian instead.
+    """
+    name = index_name or os.getenv("DATABRICKS_VECTOR_INDEX", "workspace.default.project_embeddings_index")
+    out = await vector_search_databricks(
+        query_text,
+        index_name=name,
+        num_results=num_results,
+        columns=columns or [],
+        query_type=query_type,
+    )
     if return_demo_flag:
-        return (out_rows, False)
-    return out_rows
+        return (out, False)
+    return out
 
 
 async def query_llm(
