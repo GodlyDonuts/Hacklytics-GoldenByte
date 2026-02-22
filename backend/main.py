@@ -11,12 +11,17 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from routers import ask, benchmark, genie, globe, report, predictive
 from services.cache import warm_cache
+from services.kafka_processor import kafka_processor
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await warm_cache()
+    # Start mock Kafka streams
+    await kafka_processor.start()
     yield
+    # Stop mock Kafka streams
+    await kafka_processor.stop()
 
 
 app = FastAPI(title="Crisis Topography API", lifespan=lifespan)

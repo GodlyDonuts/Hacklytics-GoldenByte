@@ -38,3 +38,60 @@ Pablo is the interactive ElevenLabs voice agent powering the Crisis Topography C
    - **Description**: Switches the user's current view between the 3D globe and the unified dashboard.
    - **Usage**: "Show me the dashboard" or "Go back to the globe."
    - **Action**: Uses the browser router to change paths without refreshing the session.
+   - **Configuration (ElevenLabs JSON)**:
+     ```json
+     {
+       "parameters": [
+         {
+           "id": "page",
+           "name": "Page Name",
+           "description": "The page to navigate to ('globe' or 'dashboard')",
+           "type": "string",
+           "required": true
+         }
+       ]
+     }
+     ```
+
+7. **`set_time_period`**
+   - **Description**: Changes the active year and/or month for the crisis data dashboard.
+   - **Usage**: "Pablo, set the date to October" or "Change the year to 2025."
+   - **Action**: 
+     - Updates the global filters for year and month.
+     - If only the month is mentioned, the year remains unchanged.
+     - Year must be between 2022 and 2026.
+   - **Configuration (ElevenLabs JSON)**:
+     ```json
+     {
+       "parameters": [
+         {
+           "id": "year",
+           "name": "Year",
+           "description": "The 4-digit year (optional, 2022-2026).",
+           "type": "integer",
+           "required": false
+         },
+         {
+           "id": "month",
+           "name": "Month",
+           "description": "The month number (optional, 1=Jan, 12=Dec).",
+           "type": "integer",
+           "required": false
+         }
+       ]
+     }
+     ```
+
+8. **`run_predictive_scan`**
+   - **Description**: Triggers a global intelligence scan to identify future crisis risks using the Actian Vector DB.
+   - **Usage**: "Pablo, scan for future anomalies" or "Run a predictive intelligence scan."
+   - **Action**: 
+     - Switches the globe to predictive mode.
+     - Fetches high-confidence risks from the vector database.
+     - Narrates the top identified anomaly.
+   - **Configuration (ElevenLabs JSON)**:
+     ```json
+     {
+       "parameters": []
+     }
+     ```

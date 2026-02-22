@@ -23,6 +23,27 @@ html {
   scroll-behavior: smooth;
   /* Animate ALL --phase-* variable consumers via color transitions */
   transition: background-color 0.6s ease, color 0.6s ease;
+
+  /* Dashboard Modernization - Swiss Minimalist Theme */
+  --dash-bg: #000000;
+  --dash-surface: #080808;
+  --dash-border: #141414;
+  --dash-text: #ffffff;
+  --dash-text-muted: #666666;
+  --dash-accent-muted: #1a1a1a;
+  --dash-sage: #424d44;
+  --dash-terracotta: #5e4141;
+
+  /* Finance Dashboard Variables - Ultra Minimalist */
+  --finance-bg: #050505;
+  --finance-surface: #0a0a0a;
+  --finance-border: #1a1a1a;
+  --finance-text: #ffffff;
+  --finance-text-muted: #808080;
+  --finance-accent-up: #4a5d4d;
+  /* Muted Sage */
+  --finance-accent-down: #6b4a4a;
+  /* Muted Terracotta */
 }
 
 body {

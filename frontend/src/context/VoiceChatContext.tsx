@@ -4,7 +4,7 @@ import React, { createContext, useContext, useState, useCallback, useEffect, use
 import { useConversation } from '@elevenlabs/react';
 import { useRouter } from 'next/navigation';
 import { useGlobeContext } from '@/context/GlobeContext';
-import { generateReport } from '@/lib/api';
+import { generateReport, getPredictiveRisks } from '@/lib/api';
 import { pushActivity, resolveActivity } from '@/components/Globe/AgentActivityFeed';
 
 const AGENT_ID = process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID || 'agent_1201khzd23t9fsaramppkhnftan0';
@@ -36,7 +36,7 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
   const [hasStarted, setHasStarted] = useState(false);
   const [textInput, setTextInput] = useState('');
   const [textError, setTextError] = useState<string | null>(null);
-  const { setFlyToCoordinates, setComparisonData, setViewMode, setGenieChartData, setAskResult, setSelectedCountry, setIsSpotlightActive, setFilters, nearestSpotlightIso, selectedCountry, comparisonData } = useGlobeContext();
+  const { setFlyToCoordinates, setComparisonData, setViewMode, setGenieChartData, setAskResult, setSelectedCountry, setIsSpotlightActive, setFilters, setPredictiveRisks, nearestSpotlightIso, selectedCountry, comparisonData } = useGlobeContext();
   const conversationRef = useRef<ReturnType<typeof useConversation> | null>(null);
 
   const globeStateRef = useRef({ selectedCountry, comparisonData });
@@ -169,23 +169,65 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
           });
         return `Generating a ${scope} PDF report now. It will download automatically in a moment.`;
       },
-      set_time_period: (parameters: { year: number; month?: number }) => {
-        const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-        if (parameters.year < 2022 || parameters.year > 2026) {
+      set_time_period: (parameters: { year?: number; month?: number }) => {
+        const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+        // Year is optional. If provided, validate it.
+        if (parameters.year != null && (parameters.year < 2022 || parameters.year > 2026)) {
           return 'Year must be between 2022 and 2026.';
         }
+
+        // Month is optional. If provided, validate it.
         if (parameters.month != null && (parameters.month < 1 || parameters.month > 12)) {
           return 'Month must be between 1 and 12.';
         }
-        const aid = pushActivity('set_time_period', 'Changing time period', parameters.month != null ? `${MONTH_NAMES[parameters.month - 1]} ${parameters.year}` : String(parameters.year));
+
+        if (parameters.year == null && parameters.month == null) {
+          return 'No date parameters provided.';
+        }
+
+        const aid = pushActivity('set_time_period', 'Changing time period',
+          parameters.month != null
+            ? `${MONTH_NAMES[parameters.month - 1]}${parameters.year ? ` ${parameters.year}` : ''}`
+            : String(parameters.year)
+        );
+
         setFilters(f => ({
           ...f,
-          year: parameters.year,
+          year: parameters.year ?? f.year,
           month: parameters.month ?? f.month,
         }));
-        const label = parameters.month != null ? `${MONTH_NAMES[parameters.month - 1]} ${parameters.year}` : String(parameters.year);
+
+        const label = parameters.month != null
+          ? `${MONTH_NAMES[parameters.month - 1]}${parameters.year ? ` ${parameters.year}` : ''}`
+          : String(parameters.year);
+
         resolveActivity(aid, 'done', label);
         return `Changed to ${label}`;
+      },
+      run_predictive_scan: async () => {
+        const aid = pushActivity('run_predictive_scan', 'Running intelligence scan', 'Future anomalies');
+        setViewMode('predictive-risks');
+        try {
+          const data = await getPredictiveRisks();
+          setPredictiveRisks(data.risks);
+
+          if (data.risks && data.risks.length > 0) {
+            const topRisk = data.risks.reduce((prev, current) =>
+              (prev.confidence_score > current.confidence_score) ? prev : current
+            );
+
+            resolveActivity(aid, 'done', topRisk.country_name);
+            return `I have performed a predictive intelligence scan using the Actian Vector DB. The most significant anomaly identified is in ${topRisk.country_name}, where ${topRisk.risk_title} is projected with a confidence of ${Math.round(topRisk.confidence_score * 100)} percent. ${topRisk.risk_description}`;
+          } else {
+            resolveActivity(aid, 'done', 'No risks found');
+            return "Scan complete. Our predictive models do not currently identify any significant future anomalies.";
+          }
+        } catch (error) {
+          console.error('Predictive scan failed:', error);
+          resolveActivity(aid, 'error', 'Analysis failed');
+          return "I apologize, but I encountered an error while accessing the predictive models.";
+        }
       },
       reset_view: (parameters: {}) => {
         const aid = pushActivity('reset_view', 'Resetting view');
@@ -227,8 +269,14 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
   const startVoiceSession = useCallback(async () => {
     try {
       if (conversation.status === 'connected' || conversation.status === 'connecting') return;
-      await navigator.mediaDevices.getUserMedia({ audio: true });
-      await conversation.startSession({ agentId: AGENT_ID, connectionType: 'websocket' });
+      await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      await conversation.startSession({ agentId: AGENT_ID, connectionType: 'webrtc' });
       setHasStarted(true);
     } catch (err) {
       console.error('Failed to start ElevenLabs session', err);
@@ -248,7 +296,7 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
   const startSessionForText = useCallback(async () => {
     try {
       if (conversation.status === 'connected' || conversation.status === 'connecting') return true;
-      await conversation.startSession({ agentId: AGENT_ID, connectionType: 'websocket' });
+      await conversation.startSession({ agentId: AGENT_ID, connectionType: 'webrtc' });
       setHasStarted(true);
       return true;
     } catch (err) {

@@ -456,21 +456,36 @@ export default function GlobeView() {
           return el;
         });
     } else {
-      // Crisis dots at country centroids for non-predictive modes
+      // Crisis dots at country centroids, elevated to sit on top of extruded polygons
       const crisisDots = data.reduce((acc, country) => {
         const crises = country.crises ?? [];
         if (crises.length === 0 || !country.lat || !country.lng) return acc;
+
+        // Compute the polygon altitude for this country so dots render on the cap
+        const feat = polygonFeatures.find(
+          (f) => f.properties.ISO_A3 === country.iso3
+        );
+        let alt = 0.005;
+        if (feat && feat.__hasCrisis) {
+          const iso = country.iso3;
+          if (!spotlight || iso === spotlight) {
+            alt = 0.02 + metricForMode(feat) * 0.28;
+          }
+        }
+
         acc.push({
           lat: country.lat,
           lng: country.lng,
+          alt: alt + 0.005, // slight offset above the polygon cap
           crises,
           countryName: country.country_name,
         });
         return acc;
-      }, [] as { lat: number; lng: number; crises: Crisis[]; countryName: string }[]);
+      }, [] as { lat: number; lng: number; alt: number; crises: Crisis[]; countryName: string }[]);
 
       globe
         .htmlElementsData(crisisDots)
+        .htmlAltitude((d: any) => d.alt)
         .htmlElement((d: any) => {
           const el = document.createElement("div");
           const crises = d.crises as Crisis[];
