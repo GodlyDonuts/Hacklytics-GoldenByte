@@ -8,7 +8,7 @@ default:
 
 # Start the backend server
 backend:
-    source {{backend}}/venv/bin/activate && uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+    source {{backend}}/venv/bin/activate && cd {{backend}} && uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 # Start the frontend dev server
 frontend:

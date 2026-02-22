@@ -377,27 +377,38 @@ export default function DatabricksDashboard({
                     <div className="space-y-2">
                         {topSevere.slice(0, 5).map((country, idx) => {
                             const maxSeverity = Math.max(...country.crises.map(c => c.acaps_severity ?? 0));
-                            const crisis = country.crises.find(c => c.acaps_severity === maxSeverity);
-                            const severityColor = (crisis?.severity_class && SEVERITY_COLORS[crisis.severity_class]) === "#DC2626" 
+                            const topCrisis = country.crises.find(c => c.acaps_severity === maxSeverity);
+                            const severityColor = topCrisis?.severity_class === "Very High"
                                 ? "bg-red-100 text-red-700"
-                                : (crisis?.severity_class && SEVERITY_COLORS[crisis.severity_class]) === "#EA580C"
+                                : topCrisis?.severity_class === "High"
                                 ? "bg-orange-100 text-orange-700"
                                 : "bg-yellow-100 text-yellow-700";
                             return (
-                                <div
-                                    key={country.iso3}
-                                    className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-                                >
-                                    <div className="flex items-center gap-3">
-                                        <div className={`w-6 h-6 rounded flex items-center justify-center text-xs font-semibold ${severityColor}`}>
-                                            {idx + 1}
+                                <div key={country.iso3} className="p-3 bg-gray-50 rounded-lg">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-3">
+                                            <div className={`w-6 h-6 rounded flex items-center justify-center text-xs font-semibold ${severityColor}`}>
+                                                {idx + 1}
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-medium text-gray-900">{country.country_name}</p>
+                                                <p className="text-xs text-gray-500">
+                                                    {country.crises.length} crisis{country.crises.length !== 1 ? "es" : ""}
+                                                </p>
+                                            </div>
                                         </div>
-                                        <div>
-                                            <p className="text-sm font-medium text-gray-900">{country.country_name}</p>
-                                            <p className="text-xs text-gray-500">{crisis?.crisis_name}</p>
-                                        </div>
+                                        <p className="text-sm font-semibold text-gray-900">{maxSeverity.toFixed(1)}</p>
                                     </div>
-                                    <p className="text-sm font-semibold text-gray-900">{maxSeverity.toFixed(1)}</p>
+                                    {country.crises.length > 1 && (
+                                        <div className="ml-9 mt-2 space-y-1">
+                                            {country.crises.map((c, ci) => (
+                                                <p key={c.crisis_id ?? ci} className="text-xs text-gray-500 flex justify-between">
+                                                    <span className="truncate mr-2">{c.crisis_name}</span>
+                                                    <span className="shrink-0 font-mono">{c.acaps_severity?.toFixed(1) ?? "--"}</span>
+                                                </p>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
                             );
                         })}
@@ -501,34 +512,71 @@ export default function DatabricksDashboard({
                 {comparisonData && comparisonData.length === 2 && (
                     <div className="grid grid-cols-2 gap-6">
                         {comparisonData.map((country) => {
-                            const crisis = country.crises[0];
+                            const totalPin = country.crises.reduce((s, c) => s + (c.people_in_need ?? 0), 0);
+                            const totalGap = country.crises.reduce((s, c) => s + (c.funding_gap_usd ?? 0), 0);
+                            const coverages = country.crises.map(c => c.funding_coverage_pct).filter((v): v is number => v != null && v > 0);
+                            const avgCov = coverages.length > 0 ? coverages.reduce((a, b) => a + b, 0) / coverages.length : 0;
+                            const maxSeverity = country.crises.reduce<string | null>((best, c) => {
+                                if (!best) return c.severity_class;
+                                return (c.acaps_severity ?? 0) > 0 ? c.severity_class : best;
+                            }, null);
                             return (
                                 <div key={country.iso3} className="bg-gray-50 rounded-lg p-5">
-                                    <h4 className="text-base font-semibold text-gray-900 mb-4">{country.country_name}</h4>
-                                    <div className="space-y-3">
+                                    <h4 className="text-base font-semibold text-gray-900 mb-1">{country.country_name}</h4>
+                                    <p className="text-xs text-gray-400 mb-4">
+                                        {country.crises.length} crisis{country.crises.length !== 1 ? "es" : ""}
+                                    </p>
+                                    <div className="space-y-3 mb-4">
                                         <div className="flex justify-between items-center">
-                                            <span className="text-sm text-gray-500">Severity</span>
+                                            <span className="text-sm text-gray-500">Max Severity</span>
                                             <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${
-                                                crisis?.severity_class === "Very High" ? "bg-red-100 text-red-700" :
-                                                crisis?.severity_class === "High" ? "bg-orange-100 text-orange-700" :
+                                                maxSeverity === "Very High" ? "bg-red-100 text-red-700" :
+                                                maxSeverity === "High" ? "bg-orange-100 text-orange-700" :
                                                 "bg-yellow-100 text-yellow-700"
                                             }`}>
-                                                {crisis?.severity_class || "N/A"}
+                                                {maxSeverity || "N/A"}
                                             </span>
                                         </div>
                                         <div className="flex justify-between items-center">
-                                            <span className="text-sm text-gray-500">People in Need</span>
-                                            <span className="text-sm font-medium text-gray-900">{formatCompact(crisis?.people_in_need ?? 0)}</span>
+                                            <span className="text-sm text-gray-500">Total People in Need</span>
+                                            <span className="text-sm font-medium text-gray-900">{formatCompact(totalPin)}</span>
                                         </div>
                                         <div className="flex justify-between items-center">
-                                            <span className="text-sm text-gray-500">Funding Gap</span>
-                                            <span className="text-sm font-medium text-gray-900">${formatCompact(crisis?.funding_gap_usd ?? 0)}</span>
+                                            <span className="text-sm text-gray-500">Total Funding Gap</span>
+                                            <span className="text-sm font-medium text-gray-900">${formatCompact(totalGap)}</span>
                                         </div>
                                         <div className="flex justify-between items-center">
-                                            <span className="text-sm text-gray-500">Coverage</span>
-                                            <span className="text-sm font-medium text-gray-900">{crisis?.funding_coverage_pct?.toFixed(1)}%</span>
+                                            <span className="text-sm text-gray-500">Avg Coverage</span>
+                                            <span className="text-sm font-medium text-gray-900">{avgCov.toFixed(1)}%</span>
                                         </div>
                                     </div>
+                                    {/* Per-crisis breakdown */}
+                                    {country.crises.length > 0 && (
+                                        <div className="space-y-2 border-t border-gray-200 pt-3">
+                                            <p className="text-xs font-medium text-gray-600">Crises breakdown</p>
+                                            {country.crises.map((crisis, idx) => (
+                                                <div key={crisis.crisis_id ?? idx} className="bg-white rounded-md p-3 border border-gray-100">
+                                                    <div className="flex items-center justify-between mb-1">
+                                                        <span className="text-xs font-medium text-gray-900 truncate mr-2">
+                                                            {crisis.crisis_name || `Crisis ${idx + 1}`}
+                                                        </span>
+                                                        <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                                            crisis.severity_class === "Very High" ? "bg-red-100 text-red-700" :
+                                                            crisis.severity_class === "High" ? "bg-orange-100 text-orange-700" :
+                                                            "bg-yellow-100 text-yellow-700"
+                                                        }`}>
+                                                            {crisis.severity_class}
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex gap-4 text-xs text-gray-500">
+                                                        <span>PIN: {formatCompact(crisis.people_in_need)}</span>
+                                                        <span>Gap: ${formatCompact(crisis.funding_gap_usd)}</span>
+                                                        <span>Cov: {crisis.funding_coverage_pct?.toFixed(1) ?? "--"}%</span>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
                             );
                         })}

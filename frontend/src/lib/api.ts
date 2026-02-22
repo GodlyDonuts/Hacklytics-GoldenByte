@@ -267,6 +267,45 @@ export async function getGlobeB2B(
   return apiFetch(`/api/globe/b2b?iso3=${iso3}&year=${year}`);
 }
 
+// -- Benchmark (project-level B2B comparison) --
+
+export interface BenchmarkNeighbor {
+  project_code: string | null;
+  project_name: string | null;
+  iso3: string | null;
+  country_name: string | null;
+  cluster: string | null;
+  b2b_ratio: number | null;
+  cost_per_beneficiary: number | null;
+  b2b_delta: number | null;
+  similarity_score: number | null;
+}
+
+export interface BenchmarkResponse {
+  query_project: {
+    project_code: string | null;
+    project_name: string | null;
+    cluster: string | null;
+    b2b_ratio: number | null;
+    cost_per_beneficiary: number | null;
+  };
+  neighbors: BenchmarkNeighbor[];
+  insight: string;
+}
+
+export async function benchmarkProject(
+  projectCode: string,
+  numNeighbors: number = 5
+): Promise<BenchmarkResponse> {
+  return apiFetch("/api/benchmark", {
+    method: "POST",
+    body: JSON.stringify({
+      project_code: projectCode,
+      num_neighbors: numNeighbors,
+    }),
+  });
+}
+
 /**
  * Triggers a PDF report download from the backend.
  * scope: "global" | "country"

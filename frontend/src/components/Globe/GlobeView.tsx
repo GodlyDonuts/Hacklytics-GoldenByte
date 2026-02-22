@@ -14,19 +14,45 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import Globe, { GlobeInstance } from "globe.gl";
 import GlobeControls from "./GlobeControls";
+import GenieChartPanel from "./GenieChartPanel";
+import CountryDetailOverlay from "./CountryDetailOverlay";
+import QueryBar from "./QueryBar";
 import { useGlobeContext } from "@/context/GlobeContext";
 import { getGlobeCrises, GlobeCountry } from "@/lib/api";
 
-// Continuous color gradient stops: severity 1-5 mapped linearly to 0-1.
-const COLOR_STOPS: [number, number, number, number][] = [
-  [0.0, 30, 100, 240],   // deep blue (severity 1)
+// Color gradient stops per view mode. Each maps a 0-1 range to RGB.
+const SEVERITY_STOPS: [number, number, number, number][] = [
+  [0.0, 30, 100, 240],   // deep blue (low)
   [0.2, 0, 200, 210],    // cyan-teal
   [0.4, 40, 210, 80],    // green
   [0.6, 240, 200, 0],    // yellow
   [0.8, 250, 120, 20],   // orange
-  [1.0, 230, 40, 40],    // red (severity 5)
+  [1.0, 230, 40, 40],    // red (high)
 ];
 
+const FUNDING_GAP_STOPS: [number, number, number, number][] = [
+  [0.0, 40, 180, 80],    // green (small gap)
+  [0.3, 200, 200, 40],   // yellow
+  [0.6, 230, 130, 20],   // orange
+  [1.0, 200, 30, 30],    // red (large gap)
+];
+
+const OVERSIGHT_STOPS: [number, number, number, number][] = [
+  [0.0, 60, 60, 100],    // muted blue-grey (well-covered)
+  [0.3, 120, 50, 180],   // purple
+  [0.6, 200, 40, 160],   // magenta
+  [1.0, 255, 60, 60],    // bright red (most overlooked)
+];
+
+type ColorStops = [number, number, number, number][];
+const COLOR_STOPS: Record<string, ColorStops> = {
+  severity: SEVERITY_STOPS,
+  "funding-gap": FUNDING_GAP_STOPS,
+  anomalies: OVERSIGHT_STOPS,
+};
+
+const NEUTRAL_CAP = "rgba(255, 255, 255, 0.03)";
+const NEUTRAL_SIDE = "rgba(255, 255, 255, 0.02)";
 const DIMMED_CAP = "rgba(255, 255, 255, 0.06)";
 const DIMMED_SIDE = "rgba(255, 255, 255, 0.03)";
 
@@ -41,11 +67,11 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
-function sampleGradient(t: number): [number, number, number] {
+function sampleGradient(t: number, stops: ColorStops): [number, number, number] {
   const tc = Math.min(1, Math.max(0, t));
-  for (let i = 0; i < COLOR_STOPS.length - 1; i++) {
-    const [pos0, r0, g0, b0] = COLOR_STOPS[i];
-    const [pos1, r1, g1, b1] = COLOR_STOPS[i + 1];
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [pos0, r0, g0, b0] = stops[i];
+    const [pos1, r1, g1, b1] = stops[i + 1];
     if (tc >= pos0 && tc <= pos1) {
       const local = (tc - pos0) / (pos1 - pos0);
       return [
@@ -55,40 +81,20 @@ function sampleGradient(t: number): [number, number, number] {
       ];
     }
   }
-  const last = COLOR_STOPS[COLOR_STOPS.length - 1];
+  const last = stops[stops.length - 1];
   return [last[1], last[2], last[3]];
 }
 
-function capColor(severity: number): string {
-  const [r, g, b] = sampleGradient(severityToT(severity));
+function capColorForMode(t: number, mode: string): string {
+  const stops = COLOR_STOPS[mode] ?? SEVERITY_STOPS;
+  const [r, g, b] = sampleGradient(t, stops);
   return `rgba(${r}, ${g}, ${b}, 0.75)`;
 }
 
-function sideColor(severity: number): string {
-  const [r, g, b] = sampleGradient(severityToT(severity));
+function sideColorForMode(t: number, mode: string): string {
+  const stops = COLOR_STOPS[mode] ?? SEVERITY_STOPS;
+  const [r, g, b] = sampleGradient(t, stops);
   return `rgba(${Math.round(r * 0.4)}, ${Math.round(g * 0.4)}, ${Math.round(b * 0.4)}, 0.2)`;
-}
-
-/**
- * Natural Earth ISO_A3 can be "-99" for disputed/unrecognised territories.
- * Prefer ISO_A3_EH, then ADM0_A3, as fallbacks.
- */
-function resolveIso(props: Record<string, unknown>): string {
-  const candidates = [
-    props.ISO_A3 as string,
-    props.ISO_A3_EH as string,
-    props.ADM0_A3 as string,
-  ];
-  return candidates.find((c) => c && c !== "-99") ?? "-99";
-}
-
-function resolveName(props: Record<string, unknown>): string {
-  return (
-    (props.NAME as string) ||
-    (props.ADMIN as string) ||
-    (props.NAME_LONG as string) ||
-    resolveIso(props)
-  );
 }
 
 interface CrisisFeature {
@@ -96,9 +102,9 @@ interface CrisisFeature {
   properties: Record<string, unknown>;
   geometry: Record<string, unknown>;
   __severity: number;
+  __fundingGapNorm: number;   // 0-1 normalized funding gap
+  __oversightScore: number;   // 0-1 oversight (higher = more overlooked)
   __hasCrisis: boolean;
-  __iso: string;   // resolved, never -99
-  __name: string;
 }
 
 export default function GlobeView() {
@@ -110,7 +116,7 @@ export default function GlobeView() {
   const [geoReady, setGeoReady] = useState(false);
   const [hoveredIso, setHoveredIso] = useState<string | null>(null);
 
-  const { selectedCountry, isSpotlightActive, flyToCoordinates, comparisonData, viewMode, filters, setNearestSpotlightIso } =
+  const { selectedCountry, setSelectedCountry, flyToCoordinates, comparisonData, viewMode, filters } =
     useGlobeContext();
 
   // Fetch crisis data when year/month filters change
@@ -134,30 +140,49 @@ export default function GlobeView() {
       .catch((err) => console.error("Failed to load GeoJSON:", err));
   }, []);
 
-  // Build lookup from iso3 -> { severity, lat, lng }
+  // Build lookup from iso3 -> per-mode metrics
   const countryMetrics = useMemo(() => {
-    const map = new Map<string, { severity: number; lat: number; lng: number }>();
+    const map = new Map<string, {
+      severity: number;
+      fundingGap: number;
+      oversightScore: number;
+      lat: number;
+      lng: number;
+    }>();
+    // First pass: collect raw values
+    const rawGaps: number[] = [];
     for (const country of data) {
+      const crises = country.crises ?? [];
+      if (crises.length === 0) continue;
+      const totalGap = crises.reduce((s, c) => s + (c.funding_gap_usd ?? 0), 0);
+      rawGaps.push(totalGap);
+    }
+    const maxGap = Math.max(...rawGaps, 1);
+
+    for (const country of data) {
+      const crises = country.crises ?? [];
+      if (crises.length === 0) continue;
       let totalSeverity = 0;
-      let count = 0;
-      country.crises?.forEach((c) => {
-        totalSeverity += c.acaps_severity || 0;
-        count += 1;
-      });
-      if (count > 0) {
-        map.set(country.iso3, {
-          severity: totalSeverity / count,
-          lat: country.lat,
-          lng: country.lng,
-        });
+      let totalOversight = 0;
+      let totalGap = 0;
+      for (const c of crises) {
+        totalSeverity += c.acaps_severity ?? 0;
+        totalOversight += c.oversight_score ?? 0;
+        totalGap += c.funding_gap_usd ?? 0;
       }
+      map.set(country.iso3, {
+        severity: totalSeverity / crises.length,
+        fundingGap: totalGap / maxGap,  // normalized 0-1
+        oversightScore: totalOversight / crises.length,  // already 0-1 from backend
+        lat: country.lat,
+        lng: country.lng,
+      });
     }
     return map;
   }, [data]);
 
-  // When flyToCoordinates changes, find nearest crisis country to spotlight.
-  // Only applied when isSpotlightActive is true (set false on reset_view).
-  const nearestIso = useMemo(() => {
+  // When flyToCoordinates is set, find the nearest country ISO to spotlight
+  const spotlightIso = useMemo(() => {
     if (!flyToCoordinates) return null;
     let bestIso: string | null = null;
     let bestDist = Infinity;
@@ -173,36 +198,20 @@ export default function GlobeView() {
     return bestIso;
   }, [flyToCoordinates, countryMetrics]);
 
-  // Spotlight: hover always takes priority; voice-nav spotlight only when explicitly active
-  const spotlightIso = isSpotlightActive ? nearestIso : null;
-
-  // Sync nearestIso into context so VoiceChatContext can use it for reports
-  useEffect(() => {
-    setNearestSpotlightIso(nearestIso);
-  }, [nearestIso]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Merge GeoJSON features with crisis severity data.
-  // Countries without real crisis data get a stable random low severity (1.0–1.5)
-  // so they still render with a dim blue tint instead of being invisible.
-  // Features whose ISO resolves to -99 (disputed/unrecognised territories) are dropped.
+  // Merge GeoJSON features with all crisis metrics
   const polygonFeatures = useMemo((): CrisisFeature[] => {
     if (!geoJsonRef.current) return [];
-    return geoJsonRef.current
-      .map((feat) => {
-        const iso = resolveIso(feat.properties);
-        if (iso === "-99") return null;  // drop unrecognised territories
-        const name = resolveName(feat.properties);
-        const metrics = countryMetrics.get(iso);
-        if (metrics) {
-          return { ...feat, __severity: metrics.severity, __hasCrisis: true, __iso: iso, __name: name };
-        }
-        // Stable hash so colour doesn't flicker on re-renders
-        let hash = 0;
-        for (let k = 0; k < iso.length; k++) hash = (hash * 31 + iso.charCodeAt(k)) >>> 0;
-        const fakeSeverity = 1.0 + (hash % 100) / 200; // 1.0 – 1.5
-        return { ...feat, __severity: fakeSeverity, __hasCrisis: false, __iso: iso, __name: name };
-      })
-      .filter((f): f is CrisisFeature => f !== null);
+    return geoJsonRef.current.map((feat) => {
+      const iso = feat.properties.ISO_A3 as string;
+      const metrics = countryMetrics.get(iso);
+      return {
+        ...feat,
+        __severity: metrics?.severity ?? 0,
+        __fundingGapNorm: metrics?.fundingGap ?? 0,
+        __oversightScore: metrics?.oversightScore ?? 0,
+        __hasCrisis: metrics !== undefined,
+      };
+    });
   }, [countryMetrics, geoReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Globe init
@@ -245,43 +254,48 @@ export default function GlobeView() {
       return;
     }
 
-    // Hover takes priority over voice-agent spotlight
-    const spotlight = hoveredIso ?? spotlightIso;
+    // Hover takes priority, then selected country, then voice-agent spotlight
+    const spotlight = hoveredIso ?? selectedCountry ?? spotlightIso;
+
+    // Select the metric value (0-1) based on current view mode
+    const metricForMode = (feat: CrisisFeature): number => {
+      switch (viewMode) {
+        case "funding-gap":
+          return feat.__fundingGapNorm;
+        case "anomalies":
+          return feat.__oversightScore;
+        default: // severity
+          return severityToT(feat.__severity);
+      }
+    };
 
     globe
       .polygonsData(polygonFeatures)
       .polygonAltitude((d) => {
         const feat = d as CrisisFeature;
-        if (!feat.__hasCrisis) {
-          // Give non-crisis countries a visible raised base so they look 3D
-          let hash = 0;
-          for (let k = 0; k < feat.__iso.length; k++) hash = (hash * 31 + feat.__iso.charCodeAt(k)) >>> 0;
-          return 0.04 + (hash % 100) / 5000; // ~0.04 – 0.06
-        }
-        if (spotlight && feat.__iso !== spotlight) return 0.04;
-        return 0.02 + severityToT(feat.__severity) * 0.28;
+        const iso = feat.properties.ISO_A3 as string;
+        if (!feat.__hasCrisis) return 0.005;
+        if (spotlight && iso !== spotlight) return 0.005;
+        return 0.02 + metricForMode(feat) * 0.28;
       })
       .polygonCapColor((d) => {
         const feat = d as CrisisFeature;
-        if (spotlight && feat.__iso !== spotlight) return DIMMED_CAP;
-        if (!feat.__hasCrisis) {
-          const [r, g, b] = sampleGradient(severityToT(feat.__severity));
-          return `rgba(${r}, ${g}, ${b}, 0.55)`;
-        }
-        return capColor(feat.__severity);
+        const iso = feat.properties.ISO_A3 as string;
+        if (!feat.__hasCrisis) return NEUTRAL_CAP;
+        if (spotlight && iso !== spotlight) return DIMMED_CAP;
+        return capColorForMode(metricForMode(feat), viewMode);
       })
       .polygonSideColor((d) => {
         const feat = d as CrisisFeature;
-        if (spotlight && feat.__iso !== spotlight) return DIMMED_SIDE;
-        if (!feat.__hasCrisis) {
-          const [r, g, b] = sampleGradient(severityToT(feat.__severity));
-          return `rgba(${Math.round(r * 0.4)}, ${Math.round(g * 0.4)}, ${Math.round(b * 0.4)}, 0.08)`;
-        }
-        return sideColor(feat.__severity);
+        const iso = feat.properties.ISO_A3 as string;
+        if (!feat.__hasCrisis) return NEUTRAL_SIDE;
+        if (spotlight && iso !== spotlight) return DIMMED_SIDE;
+        return sideColorForMode(metricForMode(feat), viewMode);
       })
       .polygonStrokeColor((d) => {
         const feat = d as CrisisFeature;
-        if (spotlight && feat.__iso !== spotlight) return "rgba(255, 255, 255, 0.08)";
+        const iso = feat.properties.ISO_A3 as string;
+        if (spotlight && iso !== spotlight) return "rgba(255, 255, 255, 0.08)";
         return "rgba(255, 255, 255, 0.25)";
       })
       .polygonsTransitionDuration(300)
@@ -291,9 +305,21 @@ export default function GlobeView() {
           return;
         }
         const feat = poly as CrisisFeature;
-        setHoveredIso(feat.__iso);
+        if (feat.__hasCrisis) {
+          setHoveredIso(feat.properties.ISO_A3 as string);
+        } else {
+          setHoveredIso(null);
+        }
       })
       .polygonLabel(() => "")
+      .onPolygonClick((poly) => {
+        if (!poly) return;
+        const feat = poly as CrisisFeature;
+        if (feat.__hasCrisis) {
+          const iso = feat.properties.ISO_A3 as string;
+          setSelectedCountry(iso);
+        }
+      })
       .enablePointerInteraction(true);
 
     // Comparison arcs
@@ -321,7 +347,7 @@ export default function GlobeView() {
     } else {
       globe.arcsData([]);
     }
-  }, [polygonFeatures, comparisonData, viewMode, spotlightIso, hoveredIso]);
+  }, [polygonFeatures, comparisonData, viewMode, spotlightIso, hoveredIso, selectedCountry, countryMetrics, setSelectedCountry]);
 
   // Camera: fly to coordinates from context
   useEffect(() => {
@@ -340,84 +366,43 @@ export default function GlobeView() {
   // Look up hovered country info for the tooltip
   const hoveredInfo = useMemo(() => {
     if (!hoveredIso) return null;
-    const feat = polygonFeatures.find((f) => f.__iso === hoveredIso);
-    if (!feat) return null;
+    const feat = polygonFeatures.find((f) => f.properties.ISO_A3 === hoveredIso);
+    if (!feat || !feat.__hasCrisis) return null;
     const metrics = countryMetrics.get(hoveredIso);
+    const country = data.find((c) => c.iso3 === hoveredIso);
+    const crisisCount = country?.crises?.length ?? 0;
     return {
-      name: feat.__name,
-      iso: feat.__iso,
-      severity: metrics?.severity ?? null,  // null = no real crisis data
+      name: (feat.properties.NAME as string) ?? hoveredIso,
+      iso: hoveredIso,
+      severity: metrics?.severity ?? 0,
+      oversightScore: metrics?.oversightScore ?? 0,
+      fundingGap: metrics?.fundingGap ?? 0,
+      crisisCount,
     };
-  }, [hoveredIso, polygonFeatures, countryMetrics]);
+  }, [hoveredIso, polygonFeatures, countryMetrics, data]);
 
   return (
     <div className="relative w-full h-screen">
       <div ref={containerRef} className="w-full h-full" />
-
-      {/* ── Legend ──────────────────────────────────────────────────── */}
-      <div
-        className="absolute bottom-4 left-4 rounded-xl border border-white/10 bg-[#0d0f12]/80 px-4 py-3 backdrop-blur-md"
-        style={{ minWidth: 180 }}
-      >
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-white/40 mb-2">
-          Legend
-        </p>
-
-        {/* Color gradient bar */}
-        <div className="mb-1">
-          <p className="text-[11px] text-white/70 mb-1 font-medium">Crisis Severity</p>
-          <div
-            className="h-3 w-full rounded-full"
-            style={{
-              background:
-                "linear-gradient(to right, rgb(30,100,240), rgb(0,200,210), rgb(40,210,80), rgb(240,200,0), rgb(250,120,20), rgb(230,40,40))",
-            }}
-          />
-          <div className="flex justify-between text-[10px] text-white/40 mt-0.5">
-            <span>1 – Low</span>
-            <span>5 – Critical</span>
-          </div>
-        </div>
-
-        {/* Height encoding */}
-        <div className="mt-2 flex items-center gap-2">
-          {/* Mini bar-height icon */}
-          <div className="flex items-end gap-[3px] h-5">
-            {[0.35, 0.55, 0.75, 1].map((h, i) => (
-              <div
-                key={i}
-                className="w-[5px] rounded-sm"
-                style={{
-                  height: `${h * 100}%`,
-                  background: `rgba(0,212,255,${0.4 + i * 0.15})`,
-                }}
-              />
-            ))}
-          </div>
-          <p className="text-[11px] text-white/60">
-            Bar height = severity
-          </p>
-        </div>
-      </div>
       {/* Hovered country tooltip -- bottom right corner */}
-      {hoveredInfo && (() => {
-        const sev = hoveredInfo.severity;
-        return (
-          <div className="absolute bottom-4 right-4 rounded-lg border border-[#00d4ff]/30 bg-[#1a1d21]/90 px-4 py-3 text-sm text-white/90 backdrop-blur-sm">
-            <div className="font-semibold text-[#00e5ff]">{hoveredInfo.name} ({hoveredInfo.iso})</div>
-            <div className="text-xs text-white/60 mt-1">
-              {sev !== null ? `Severity: ${sev.toFixed(1)}` : "No active crisis"}
-            </div>
-          </div>
-        );
-      })()}
-      {/* Selected country badge (from voice agent) */}
-      {selectedCountry && !hoveredInfo && (
+      {hoveredInfo && (
         <div className="absolute bottom-4 right-4 rounded-lg border border-[#00d4ff]/30 bg-[#1a1d21]/90 px-4 py-3 text-sm text-white/90 backdrop-blur-sm">
-          Selected: {selectedCountry}
+          <div className="font-semibold text-[#00e5ff]">{hoveredInfo.name} ({hoveredInfo.iso})</div>
+          <div className="text-xs text-white/60 mt-1 space-y-0.5">
+            <div>Severity: {hoveredInfo.severity.toFixed(1)}</div>
+            {viewMode === "anomalies" && (
+              <div>Oversight: {(hoveredInfo.oversightScore * 100).toFixed(0)}%</div>
+            )}
+            {hoveredInfo.crisisCount > 1 && (
+              <div>{hoveredInfo.crisisCount} active crises</div>
+            )}
+          </div>
         </div>
       )}
       <GlobeControls globeRef={globeRef} />
+      <GenieChartPanel />
+      <CountryDetailOverlay countries={data} />
+      <QueryBar />
     </div>
   );
 }
