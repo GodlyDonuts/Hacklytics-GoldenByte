@@ -367,7 +367,7 @@ export default function CountryDetailOverlay({ countries }: CountryDetailOverlay
           </p>
           {crises.length > 0 ? (
             crises.map((crisis, idx) => (
-              <CrisisCard key={crisis.crisis_id ?? idx} crisis={crisis} index={idx} />
+              <CrisisCard key={`${crisis.crisis_id ?? 'crisis'}-${idx}`} crisis={crisis} index={idx} />
             ))
           ) : (
             <p className="text-sm text-white/40 text-center py-4">No crisis data.</p>

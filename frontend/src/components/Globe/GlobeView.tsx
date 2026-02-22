@@ -16,7 +16,6 @@ import Globe, { GlobeInstance } from "globe.gl";
 import GlobeControls from "./GlobeControls";
 import GenieChartPanel from "./GenieChartPanel";
 import CountryDetailOverlay from "./CountryDetailOverlay";
-import QueryBar from "./QueryBar";
 import { useGlobeContext } from "@/context/GlobeContext";
 import { getGlobeCrises, GlobeCountry } from "@/lib/api";
 
@@ -149,30 +148,21 @@ export default function GlobeView() {
       lat: number;
       lng: number;
     }>();
-    // First pass: collect raw values
-    const rawGaps: number[] = [];
-    for (const country of data) {
-      const crises = country.crises ?? [];
-      if (crises.length === 0) continue;
-      const totalGap = crises.reduce((s, c) => s + (c.funding_gap_usd ?? 0), 0);
-      rawGaps.push(totalGap);
-    }
-    const maxGap = Math.max(...rawGaps, 1);
-
     for (const country of data) {
       const crises = country.crises ?? [];
       if (crises.length === 0) continue;
       let totalSeverity = 0;
       let totalOversight = 0;
-      let totalGap = 0;
+      let totalCoverageRatio = 0;
       for (const c of crises) {
         totalSeverity += c.acaps_severity ?? 0;
         totalOversight += c.oversight_score ?? 0;
-        totalGap += c.funding_gap_usd ?? 0;
+        totalCoverageRatio += c.coverage_ratio ?? 1;
       }
+      const avgCoverage = totalCoverageRatio / crises.length;
       map.set(country.iso3, {
         severity: totalSeverity / crises.length,
-        fundingGap: totalGap / maxGap,  // normalized 0-1
+        fundingGap: Math.min(1, Math.max(0, 1 - avgCoverage)),  // 0 = fully funded, 1 = no funding
         oversightScore: totalOversight / crises.length,  // already 0-1 from backend
         lat: country.lat,
         lng: country.lng,
@@ -225,7 +215,8 @@ export default function GlobeView() {
       .atmosphereColor("#00d4ff")
       .atmosphereAltitude(0.18)
       .width(containerRef.current.clientWidth)
-      .height(containerRef.current.clientHeight);
+      .height(containerRef.current.clientHeight)
+      .pointOfView({ lat: 20, lng: 0, altitude: 3.2 });
 
     globeRef.current = globe;
 
@@ -402,7 +393,6 @@ export default function GlobeView() {
       <GlobeControls globeRef={globeRef} />
       <GenieChartPanel />
       <CountryDetailOverlay countries={data} />
-      <QueryBar />
     </div>
   );
 }
