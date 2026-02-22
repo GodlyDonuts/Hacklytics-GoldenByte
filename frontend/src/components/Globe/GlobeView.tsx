@@ -234,7 +234,7 @@ export default function GlobeView() {
     };
   }, []);
 
-  // Update polygon layers
+  // Update polygon layers and atmosphere
   useEffect(() => {
     const globe = globeRef.current;
     if (!globe) return;
@@ -242,6 +242,7 @@ export default function GlobeView() {
     if (polygonFeatures.length === 0) {
       globe.polygonsData([]);
       globe.arcsData([]);
+      globe.atmosphereColor("#00d4ff");
       return;
     }
 
@@ -259,6 +260,22 @@ export default function GlobeView() {
           return severityToT(feat.__severity);
       }
     };
+
+    // Update Atmosphere Color based on Spotlight
+    if (spotlight) {
+      const spotlightFeat = polygonFeatures.find(f => f.properties.ISO_A3 === spotlight);
+      if (spotlightFeat && spotlightFeat.__hasCrisis) {
+        const t = metricForMode(spotlightFeat);
+        const stops = COLOR_STOPS[viewMode] ?? SEVERITY_STOPS;
+        const [r, g, b] = sampleGradient(t, stops);
+        // Use a slightly more vibrant version for the atmosphere
+        globe.atmosphereColor(`rgb(${Math.min(255, r + 20)}, ${Math.min(255, g + 20)}, ${Math.min(255, b + 20)})`);
+      } else {
+        globe.atmosphereColor("#00d4ff");
+      }
+    } else {
+      globe.atmosphereColor("#00d4ff");
+    }
 
     globe
       .polygonsData(polygonFeatures)
