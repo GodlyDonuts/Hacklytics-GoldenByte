@@ -65,7 +65,7 @@ const defaultState: GlobeState = {
   nearestSpotlightIso: null,
   filters: {
     year: 2024,
-    month: null,
+    month: 1,
     country: null,
     crisis: null,
     funds: null,

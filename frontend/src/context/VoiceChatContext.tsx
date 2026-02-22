@@ -36,7 +36,7 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
   const [hasStarted, setHasStarted] = useState(false);
   const [textInput, setTextInput] = useState('');
   const [textError, setTextError] = useState<string | null>(null);
-  const { setFlyToCoordinates, setComparisonData, setViewMode, setGenieChartData, setSelectedCountry, setIsSpotlightActive, nearestSpotlightIso, selectedCountry, comparisonData } = useGlobeContext();
+  const { setFlyToCoordinates, setComparisonData, setViewMode, setGenieChartData, setSelectedCountry, setIsSpotlightActive, setFilters, nearestSpotlightIso, selectedCountry, comparisonData } = useGlobeContext();
   const conversationRef = useRef<ReturnType<typeof useConversation> | null>(null);
 
   const globeStateRef = useRef({ selectedCountry, comparisonData });
@@ -170,6 +170,24 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
             console.error('Report generation failed:', err);
           });
         return `Generating a ${scope} PDF report now. It will download automatically in a moment.`;
+      },
+      set_time_period: (parameters: { year: number; month?: number }) => {
+        const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+        if (parameters.year < 2022 || parameters.year > 2026) {
+          return 'Year must be between 2022 and 2026.';
+        }
+        if (parameters.month != null && (parameters.month < 1 || parameters.month > 12)) {
+          return 'Month must be between 1 and 12.';
+        }
+        const aid = pushActivity('set_time_period', 'Changing time period', parameters.month != null ? `${MONTH_NAMES[parameters.month - 1]} ${parameters.year}` : String(parameters.year));
+        setFilters(f => ({
+          ...f,
+          year: parameters.year,
+          month: parameters.month ?? f.month,
+        }));
+        const label = parameters.month != null ? `${MONTH_NAMES[parameters.month - 1]} ${parameters.year}` : String(parameters.year);
+        resolveActivity(aid, 'done', label);
+        return `Changed to ${label}`;
       },
       reset_view: (parameters: {}) => {
         const aid = pushActivity('reset_view', 'Resetting view');

@@ -129,7 +129,7 @@ export default function GlobeView() {
   const [geoReady, setGeoReady] = useState(false);
   const [hoveredIso, setHoveredIso] = useState<string | null>(null);
 
-  const { selectedCountry, setSelectedCountry, flyToCoordinates, comparisonData, viewMode, filters, setFilters, predictiveRisks, setPredictiveRisks, isSpotlightActive } =
+  const { selectedCountry, setSelectedCountry, flyToCoordinates, comparisonData, viewMode, filters, predictiveRisks, setPredictiveRisks, isSpotlightActive } =
     useGlobeContext();
 
   const [loadingRisks, setLoadingRisks] = useState(false);
@@ -512,16 +512,8 @@ export default function GlobeView() {
     <div className="relative w-full h-screen">
       <div ref={containerRef} className="w-full h-full" />
 
-      {/* Year/Month indicator -- top left */}
-      <div className="absolute top-4 left-4 z-20 rounded-lg border border-[#00d4ff]/20 bg-[#0d1117]/80 backdrop-blur-sm px-4 py-2.5 flex items-center gap-3">
-        <button
-          type="button"
-          onClick={() => setFilters((f) => ({ ...f, year: Math.max(2022, f.year - 1), month: null }))}
-          className="text-white/40 hover:text-white/80 text-sm font-mono transition-colors"
-          aria-label="Previous year"
-        >
-          &lt;
-        </button>
+      {/* Year/Month indicator -- top left (read-only, controlled by voice) */}
+      <div className="absolute top-4 left-4 z-20 rounded-lg border border-[#00d4ff]/20 bg-[#0d1117]/80 backdrop-blur-sm px-4 py-2.5">
         <div className="text-center min-w-[100px]">
           <p className="text-lg font-semibold text-white/90 font-mono leading-tight">
             {filters.month != null ? `${MONTH_NAMES[filters.month - 1]} ${filters.year}` : String(filters.year)}
@@ -530,43 +522,6 @@ export default function GlobeView() {
             {filters.month != null ? "Monthly View" : "Full Year"}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setFilters((f) => ({ ...f, year: Math.min(2026, f.year + 1), month: null }))}
-          className="text-white/40 hover:text-white/80 text-sm font-mono transition-colors"
-          aria-label="Next year"
-        >
-          &gt;
-        </button>
-        <div className="w-px h-6 bg-white/10" />
-        <button
-          type="button"
-          onClick={() =>
-            setFilters((f) => {
-              if (f.month === null) return { ...f, month: 1 };
-              if (f.month <= 1) return { ...f, month: null };
-              return { ...f, month: f.month - 1 };
-            })
-          }
-          className="text-white/40 hover:text-white/80 text-xs font-mono transition-colors"
-          aria-label="Previous month"
-        >
-          M-
-        </button>
-        <button
-          type="button"
-          onClick={() =>
-            setFilters((f) => {
-              if (f.month === null) return { ...f, month: 1 };
-              if (f.month >= 12) return { ...f, month: null };
-              return { ...f, month: f.month + 1 };
-            })
-          }
-          className="text-white/40 hover:text-white/80 text-xs font-mono transition-colors"
-          aria-label="Next month"
-        >
-          M+
-        </button>
       </div>
 
       {/* Hovered country tooltip -- bottom right corner */}
