@@ -1,13 +1,14 @@
 """
-Build the crisis_hrp_funding merge table from 3 CSVs:
+Build the crisis_hrp_funding merge table from 3 CSVs + population data:
   - crises.csv (crisis severity data, 2022-2026)
   - hrp.csv (humanitarian response plans)
   - requirements_funding.csv (funding per HRP)
+  - worldbank_population_2022_2026.csv (country population by year)
 
 Outputs: databricks/data/crisis_hrp_funding.csv
 
-Population columns (pop_data.csv, populations.csv) are placeholders
-and will be added when those files become available.
+Remaining population columns (pop_data.csv: IPC phase breakdowns) are
+placeholders and will be added when that file becomes available.
 """
 
 import json
@@ -240,10 +241,40 @@ def match_crises_to_hrps(crises: pd.DataFrame, hrp_funded: pd.DataFrame):
 
 
 # ---------------------------------------------------------------------------
+# Step 5: Load population data
+# ---------------------------------------------------------------------------
+
+def load_populations(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    df = df.rename(columns={"iso3": "iso3", "year": "pop_year"})
+
+    # Forward-fill 2024 values into 2025 and 2026 since World Bank
+    # data lags by ~1 year
+    latest = df[df["pop_year"] == df["pop_year"].max()].copy()
+    filled = []
+    for target_year in [2025, 2026]:
+        if target_year not in df["pop_year"].values:
+            fill = latest.copy()
+            fill["pop_year"] = target_year
+            filled.append(fill)
+    if filled:
+        df = pd.concat([df] + filled, ignore_index=True)
+
+    print("=== Step 5: populations ===")
+    print(f"  Shape: {df.shape}")
+    print(f"  Years: {sorted(df['pop_year'].unique())}")
+    print(f"  Countries: {df['iso3'].nunique()}")
+    print()
+
+    return df
+
+
+# ---------------------------------------------------------------------------
 # Step 4c: Union and finalize
 # ---------------------------------------------------------------------------
 
-def finalize(covered: pd.DataFrame, overlooked: pd.DataFrame) -> pd.DataFrame:
+def finalize(covered: pd.DataFrame, overlooked: pd.DataFrame,
+             populations: pd.DataFrame) -> pd.DataFrame:
     # Align columns: add HRP columns as null to overlooked
     hrp_cols = [
         "hrp_code", "hrp_name", "hrp_type_name", "hrp_locations",
@@ -253,9 +284,9 @@ def finalize(covered: pd.DataFrame, overlooked: pd.DataFrame) -> pd.DataFrame:
         if col not in overlooked.columns:
             overlooked[col] = None
 
-    # Population placeholder columns
-    pop_cols = [
-        "population", "percent_affected_pop",
+    # Remaining placeholder columns (IPC phase data not yet available)
+    ipc_cols = [
+        "percent_affected_pop",
         "people_in_minimal", "people_in_stressed",
         "people_in_moderate", "people_in_severe", "people_in_extreme",
         "total_affected", "b2b_ratio",
@@ -266,23 +297,36 @@ def finalize(covered: pd.DataFrame, overlooked: pd.DataFrame) -> pd.DataFrame:
         "row_id",
         "crisis_year", "crisis_month", "iso3", "country",
         "crisis_id", "crisis_name", "inform_severity_index", "people_in_need",
-    ] + pop_cols + [
+        "population",
+    ] + ipc_cols + [
         "has_hrp", "overlooked_crisis",
     ] + hrp_cols
 
     # Select common columns from covered
     covered_out = covered.rename(columns={}).copy()
-    for col in pop_cols:
-        if col not in covered_out.columns:
-            covered_out[col] = None
 
     # Union
     df = pd.concat([covered_out, overlooked], ignore_index=True)
 
+    # Join population data on (crisis_year, iso3)
+    df = df.merge(
+        populations[["pop_year", "iso3", "population"]],
+        left_on=["crisis_year", "iso3"],
+        right_on=["pop_year", "iso3"],
+        how="left",
+    )
+    df = df.drop(columns=["pop_year"])
+
+    pop_matched = df["population"].notna().sum()
+    pop_total = len(df)
+    print(f"=== Population join ===")
+    print(f"  Matched: {pop_matched}/{pop_total} ({100*pop_matched/pop_total:.1f}%)")
+    print()
+
     # Add row_id
     df["row_id"] = range(1, len(df) + 1)
 
-    # Ensure all final columns exist
+    # Ensure all final columns exist (IPC placeholders)
     for col in final_cols:
         if col not in df.columns:
             df[col] = None
@@ -300,10 +344,11 @@ def main():
     crises = load_crises(DATA_DIR / "crises.csv")
     hrp = load_hrp(DATA_DIR / "hrp.csv")
     rf = load_requirements_funding(DATA_DIR / "requirements_funding.csv")
+    populations = load_populations(DATA_DIR / "worldbank_population_2022_2026.csv")
 
     hrp_funded = join_hrp_funding(hrp, rf)
     covered, overlooked = match_crises_to_hrps(crises, hrp_funded)
-    result = finalize(covered, overlooked)
+    result = finalize(covered, overlooked, populations)
 
     # Write output
     out_path = DATA_DIR / "crisis_hrp_funding.csv"
