@@ -3,22 +3,21 @@
 import { useEffect, useState, useMemo } from "react";
 import {
     Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-    CartesianGrid, ScatterChart, Scatter, Line, ComposedChart, Area,
-    Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, AreaChart
+    CartesianGrid, ScatterChart, Scatter, Line, ComposedChart, BarChart
 } from "recharts";
 import { getGlobeCrises, type GlobeCountry } from "@/lib/api";
 import ActianBenchmark from "./ActianBenchmark";
+import { MetricCard } from "./Dashboard/MetricCard";
+import { DataRow } from "./Dashboard/DataRow";
 
-const C = {
-    bg: "#0a0e14",
-    surface: "#0d1117",
-    elevated: "#161b22",
-    text: "rgba(255,255,255,0.9)",
-    textMuted: "rgba(255,255,255,0.3)",
-    textSecondary: "rgba(255,255,255,0.5)",
-    border: "rgba(255,255,255,0.08)",
-    accent: "#00d4ff",
-    accentSecondary: "#00e5a0",
+const DASH_THEME = {
+    bg: "var(--dash-bg)",
+    surface: "var(--dash-surface)",
+    border: "var(--dash-border)",
+    text: "var(--dash-text)",
+    textMuted: "var(--dash-text-muted)",
+    sage: "var(--dash-sage)",
+    terracotta: "var(--dash-terracotta)",
 } as const;
 
 function formatCompact(v: number | null): string {
@@ -29,19 +28,14 @@ function formatCompact(v: number | null): string {
     return Number.isInteger(v) ? String(v) : v.toFixed(1);
 }
 
-const tooltipStyle: React.CSSProperties = {
-    backgroundColor: C.elevated,
-    borderColor: C.border,
-    color: C.text,
-    borderRadius: "6px",
-    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.15)",
-    fontSize: "12px",
-    padding: "8px 12px",
-};
-
-const axisTickStyle = {
-    fill: C.textMuted,
-    fontSize: 11,
+const customTooltipStyle = {
+    backgroundColor: DASH_THEME.surface,
+    border: `1px solid ${DASH_THEME.border}`,
+    borderRadius: '0px',
+    padding: '12px',
+    fontSize: '11px',
+    fontFamily: 'var(--font-mono), monospace',
+    color: DASH_THEME.text,
 };
 
 interface DashboardProps {
@@ -76,339 +70,136 @@ export default function DatabricksDashboard({
 
     const metrics = useMemo(() => {
         const allCrises = countries.flatMap((c) => c.crises);
-        const totalPeopleInNeed = allCrises.reduce((sum, c) => sum + (c.people_in_need ?? 0), 0);
-        const totalFundingGap = allCrises.reduce((sum, c) => sum + (c.funding_gap_usd ?? 0), 0);
-
-        let avgHri = 0;
-        let validHri = 0;
-        allCrises.forEach(c => {
-            if (c.oversight_score != null) {
-                avgHri += c.oversight_score;
-                validHri++;
-            }
-        });
-
         return {
             totalCountries: countries.length,
-            totalPeopleInNeed,
-            totalFundingGap,
-            avgHri: validHri > 0 ? (avgHri / validHri) : 0,
+            totalPeopleInNeed: allCrises.reduce((sum, c) => sum + (c.people_in_need ?? 0), 0),
+            totalFundingGap: allCrises.reduce((sum, c) => sum + (c.funding_gap_usd ?? 0), 0),
+            avgHri: allCrises.filter(c => c.oversight_score != null).reduce((sum, c, _, arr) => sum + (c.oversight_score ?? 0) / arr.length, 0),
             activeCrises: allCrises.length
         };
     }, [countries]);
 
-    const scatterData = useMemo(() => {
-        return countries.flatMap((c) =>
-            c.crises.map((crisis) => ({
-                x: crisis.acaps_severity ?? 0,
-                y: crisis.funding_gap_usd ?? 0,
-                z: crisis.people_in_need ?? 0,
-                name: c.country_name,
-                severity: crisis.severity_class,
-            }))
-        ).filter(d => d.y > 0);
-    }, [countries]);
-
-    const hriData = useMemo(() => {
-        return countries.flatMap(c => c.crises.map(crisis => ({
-            name: c.iso3,
-            fullName: c.country_name,
-            crisisName: crisis.crisis_name,
-            hri: crisis.oversight_score ?? 0,
-            volatility: (100 - (crisis.funding_coverage_pct ?? 0)) / 100,
-            gap: crisis.funding_gap_usd ?? 0
-        }))).sort((a, b) => b.hri - a.hri).slice(0, 15);
-    }, [countries]);
-
-    const areaData = useMemo(() => {
+    const topCrises = useMemo(() => {
         return countries
-            .map(c => {
-                const totalReq = c.crises.reduce((sum, cr) => sum + ((cr.funding_gap_usd ?? 0) / (1 - (cr.funding_coverage_pct ?? 0) / 100 || 1)), 0);
-                const totalGap = c.crises.reduce((sum, cr) => sum + (cr.funding_gap_usd ?? 0), 0);
-                return {
-                    name: c.iso3,
-                    funded: totalReq - totalGap,
-                    gap: totalGap,
-                    totalReq
-                };
-            })
-            .sort((a, b) => b.totalReq - a.totalReq)
-            .slice(0, 15);
-    }, [countries]);
-
-    const radarData = useMemo(() => {
-        const clusterMap = new Map<string, { severity: number; gap: number; count: number }>();
-        countries.forEach(c => {
-            c.crises.forEach(cr => {
-                const type = cr.severity_class || "Unknown";
-                const curr = clusterMap.get(type) || { severity: 0, gap: 0, count: 0 };
-                curr.severity += (cr.acaps_severity ?? 0);
-                curr.gap += (cr.funding_gap_usd ?? 0);
-                curr.count += 1;
-                clusterMap.set(type, curr);
-            });
-        });
-        const arr = Array.from(clusterMap.entries()).map(([subject, stats]) => ({
-            subject: subject.slice(0, 15),
-            severityScale: (stats.severity / stats.count) * 20,
-            gapScale: Math.min(100, (stats.gap / 1_000_000_000) * 10),
-            fullMark: 100
-        }));
-        return arr.slice(0, 6);
+            .flatMap(c => c.crises.map(cr => ({
+                id: `${c.iso3}-${cr.crisis_name}`,
+                label: cr.crisis_name,
+                subValue: c.country_name,
+                value: `$${formatCompact(cr.funding_gap_usd)}`,
+                trend: Math.round(((cr.acaps_severity ?? 0) / 5) * 100)
+            })))
+            .sort((a, b) => parseFloat(b.value.replace(/[^0-9.-]+/g, "")) - parseFloat(a.value.replace(/[^0-9.-]+/g, "")))
+            .slice(0, 8);
     }, [countries]);
 
     if (loading) {
         return (
-            <div className={`flex items-center justify-center min-h-[600px] ${className}`} style={{ backgroundColor: C.bg }}>
-                <div className="flex flex-col items-center gap-3">
-                    <div className="w-6 h-6 border-2 rounded-full animate-spin" style={{ borderColor: C.border, borderTopColor: C.accent }} />
-                    <p className="text-sm" style={{ color: C.textMuted }}>Loading crisis data...</p>
+            <div className="flex items-center justify-center min-h-[600px] bg-black">
+                <div className="text-[10px] uppercase font-bold tracking-[0.4em] text-white animate-pulse">
+                    SYSTEM_INITIALIZING
                 </div>
             </div>
         );
     }
-
-    if (error) {
-        return (
-            <div className={`flex items-center justify-center min-h-[600px] ${className}`} style={{ backgroundColor: C.bg }}>
-                <div className="rounded-lg p-8 text-center max-w-md border" style={{ backgroundColor: C.surface, borderColor: C.border }}>
-                    <p className="text-sm font-medium text-red-400 mb-2">Unable to load data</p>
-                    <p className="text-xs leading-relaxed" style={{ color: C.textMuted }}>{error}</p>
-                    <button
-                        onClick={() => loadData()}
-                        className="mt-4 px-4 py-1.5 text-xs font-medium rounded-md transition-colors"
-                        style={{ backgroundColor: C.elevated, color: C.text }}
-                    >
-                        Retry
-                    </button>
-                </div>
-            </div>
-        );
-    }
-
-    const metricCards = [
-        { label: "Countries affected", value: String(metrics.totalCountries) },
-        { label: "Active crises", value: String(metrics.activeCrises) },
-        { label: "Funding gap", value: "$" + formatCompact(metrics.totalFundingGap), accent: true },
-        { label: "People in need", value: formatCompact(metrics.totalPeopleInNeed) },
-        { label: "Avg. oversight score", value: (metrics.avgHri * 100).toFixed(1) },
-    ];
 
     return (
-        <div className={className} style={{ backgroundColor: C.bg, color: C.text }}>
-            <div className="max-w-[1600px] mx-auto px-6 lg:px-8 py-8 space-y-8">
+        <div className={`bg-black text-white selection:bg-white selection:text-black ${className}`}>
+            <div className="max-w-[1600px] mx-auto px-12 py-16 space-y-20">
 
-                {/* Metric cards */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                    {metricCards.map((m, i) => (
-                        <div
-                            key={i}
-                            className="rounded-lg p-4 border"
-                            style={{ backgroundColor: C.surface, borderColor: C.border }}
-                        >
-                            <p className="text-[11px] font-medium mb-1.5" style={{ color: C.textMuted }}>
-                                {m.label}
-                            </p>
-                            <p
-                                className="text-2xl font-semibold tracking-tight tabular-nums"
-                                style={{ color: m.accent ? C.accent : C.text }}
-                            >
-                                {m.value}
-                            </p>
+                {/* Header Section */}
+                <header className="flex justify-between items-end border-b border-[var(--dash-border)] pb-8">
+                    <div className="space-y-1">
+                        <div className="text-[10px] font-bold tracking-[0.3em] text-[var(--dash-text-muted)] uppercase">
+                            CRISIS_TOPOGRAPHY_V4.0
                         </div>
-                    ))}
+                        <h2 className="text-3xl font-medium tracking-tighter uppercase">Global Statistics</h2>
+                    </div>
+                    <div className="text-[10px] font-mono text-[var(--dash-text-muted)] uppercase">
+                        Reporting Year: {year} // Status: Active
+                    </div>
+                </header>
+
+                {/* Grid 1: Metrics */}
+                <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-px bg-[var(--dash-border)] border border-[var(--dash-border)]">
+                    <MetricCard label="Affected Nations" value={metrics.totalCountries} />
+                    <MetricCard label="Active Operations" value={metrics.activeCrises} />
+                    <MetricCard label="Funding Deficit" value={`$${formatCompact(metrics.totalFundingGap)}`} highlight />
+                    <MetricCard label="Population in Need" value={formatCompact(metrics.totalPeopleInNeed)} />
+                    <MetricCard label="Oversight Index" value={(metrics.avgHri * 100).toFixed(1)} />
+                </section>
+
+                {/* Grid 2: Analysis & Ledger */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-16">
+
+                    {/* Left: Crisis Ledger */}
+                    <div className="lg:col-span-12">
+                        <div className="flex justify-between items-end mb-8 border-b border-[var(--dash-border)] pb-4">
+                            <div className="text-[10px] font-bold tracking-[0.3em] text-[var(--dash-text-muted)] uppercase">
+                                CRISIS_LEDGER_DATA
+                            </div>
+                            <div className="text-[10px] font-mono text-[var(--dash-text-muted)] hover:text-white cursor-pointer transition-colors">
+                                EXPORT_RAW_JSON →
+                            </div>
+                        </div>
+                        <div className="border border-[var(--dash-border)] bg-[var(--dash-surface)]">
+                            <div className="grid grid-cols-[2fr_1fr_1fr] gap-4 px-6 py-3 bg-white/[0.03] border-b border-[var(--dash-border)] text-[9px] font-bold uppercase tracking-[0.2em] text-[var(--dash-text-muted)]">
+                                <div>Operational Arena</div>
+                                <div className="text-right">Deficit (USD)</div>
+                                <div className="text-right">Severity %</div>
+                            </div>
+                            <div className="divide-y divide-[var(--dash-border)]">
+                                {topCrises.map(crisis => (
+                                    <DataRow key={crisis.id} {...crisis} />
+                                ))}
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
-                {/* Charts grid */}
-                <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-
-                    {/* Left column: main charts */}
-                    <div className="xl:col-span-2 space-y-6 flex flex-col">
-
-                        <ChartCard title="Funding Gap vs. Severity" subtitle="Each point represents a crisis, sized by affected population.">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <ScatterChart margin={{ top: 16, right: 16, bottom: 32, left: 24 }}>
-                                    <defs>
-                                        <filter id="glow">
-                                            <feGaussianBlur stdDeviation="2.5" result="blur" />
-                                            <feMerge>
-                                                <feMergeNode in="blur" />
-                                                <feMergeNode in="SourceGraphic" />
-                                            </feMerge>
-                                        </filter>
-                                    </defs>
-                                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
-                                    <XAxis
-                                        dataKey="x"
-                                        type="number"
-                                        domain={[0, 5]}
-                                        name="Severity"
-                                        tick={axisTickStyle}
-                                        axisLine={{ stroke: C.border }}
-                                        tickLine={false}
-                                        label={{ value: "ACAPS Severity", position: "insideBottom", offset: -18, style: { fill: C.textSecondary, fontSize: 11 } }}
-                                    />
-                                    <YAxis
-                                        dataKey="y"
-                                        type="number"
-                                        name="Funding Gap"
-                                        tickFormatter={formatCompact}
-                                        tick={axisTickStyle}
-                                        axisLine={false}
-                                        tickLine={false}
-                                        width={64}
-                                        label={{ value: "Funding Gap (USD)", angle: -90, position: "insideLeft", offset: -8, style: { fill: C.textSecondary, fontSize: 11 } }}
-                                    />
-                                    <Tooltip
-                                        cursor={{ strokeDasharray: "3 3", stroke: C.textMuted }}
-                                        content={({ active, payload }) => {
-                                            if (!active || !payload?.length) return null;
-                                            const d = payload[0].payload;
-                                            return (
-                                                <div style={tooltipStyle}>
-                                                    <p style={{ color: C.accent, fontWeight: 600, marginBottom: 4 }}>{d.name}</p>
-                                                    <p style={{ color: C.text, fontSize: 11 }}>Severity: <span style={{ color: C.accent }}>{d.x.toFixed(1)}</span></p>
-                                                    <p style={{ color: C.text, fontSize: 11 }}>Funding gap: <span style={{ color: C.accentSecondary }}>${formatCompact(d.y)}</span></p>
-                                                    {d.z > 0 && <p style={{ color: C.text, fontSize: 11 }}>People in need: {formatCompact(d.z)}</p>}
-                                                </div>
-                                            );
-                                        }}
-                                    />
-                                    <Scatter
-                                        data={scatterData}
-                                        fill={C.accent}
-                                        fillOpacity={0.65}
-                                        stroke={C.accent}
-                                        strokeOpacity={0.3}
-                                        strokeWidth={4}
-                                        shape={(props: any) => {
-                                            const r = Math.max(4, Math.min(14, Math.sqrt((props.payload?.z ?? 0) / 100000)));
-                                            return <circle cx={props.cx} cy={props.cy} r={r} fill={C.accent} fillOpacity={0.65} stroke={C.accent} strokeOpacity={0.25} strokeWidth={r * 0.6} filter="url(#glow)" />;
-                                        }}
-                                    />
-                                </ScatterChart>
-                            </ResponsiveContainer>
-                        </ChartCard>
-
-                        <ChartCard title="Oversight Risk Index" subtitle="Top 15 most overlooked crises by oversight score, overlaid with their funding gaps.">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <ComposedChart data={hriData} margin={{ top: 16, right: 16, bottom: 16, left: 0 }}>
-                                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
-                                    <XAxis
-                                        dataKey="name"
-                                        tick={axisTickStyle}
-                                        axisLine={{ stroke: C.border }}
-                                        tickLine={false}
-                                    />
-                                    <YAxis
-                                        yAxisId="left"
-                                        tickFormatter={(val) => (val * 100).toFixed(0)}
-                                        tick={axisTickStyle}
-                                        axisLine={false}
-                                        tickLine={false}
-                                        domain={[0, 1]}
-                                    />
-                                    <YAxis
-                                        yAxisId="right"
-                                        orientation="right"
-                                        tickFormatter={formatCompact}
-                                        tick={axisTickStyle}
-                                        axisLine={false}
-                                        tickLine={false}
-                                    />
-                                    <Tooltip contentStyle={tooltipStyle} />
-                                    <Bar yAxisId="right" dataKey="gap" name="Funding Gap" fill={C.accentSecondary} radius={[3, 3, 0, 0]} opacity={0.5} />
-                                    <Line yAxisId="left" type="monotone" dataKey="hri" name="Oversight Score" stroke={C.accent} strokeWidth={2} dot={{ fill: C.accent, r: 3 }} />
-                                </ComposedChart>
-                            </ResponsiveContainer>
-                        </ChartCard>
-
-                        <ChartCard title="Funding Allocation by Region" subtitle="Top 15 countries by total requirements, showing funded portion vs. remaining gap.">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <AreaChart data={areaData} margin={{ top: 16, right: 24, left: 0, bottom: 0 }}>
-                                    <defs>
-                                        <linearGradient id="gradFunded" x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="5%" stopColor={C.accent} stopOpacity={0.6} />
-                                            <stop offset="95%" stopColor={C.accent} stopOpacity={0.02} />
-                                        </linearGradient>
-                                        <linearGradient id="gradGap" x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="5%" stopColor={C.accentSecondary} stopOpacity={0.6} />
-                                            <stop offset="95%" stopColor={C.accentSecondary} stopOpacity={0.02} />
-                                        </linearGradient>
-                                    </defs>
-                                    <XAxis
-                                        dataKey="name"
-                                        tick={axisTickStyle}
-                                        axisLine={{ stroke: C.border }}
-                                        tickLine={false}
-                                    />
-                                    <YAxis
-                                        tickFormatter={formatCompact}
-                                        tick={axisTickStyle}
-                                        axisLine={false}
-                                        tickLine={false}
-                                    />
-                                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
-                                    <Tooltip contentStyle={tooltipStyle} formatter={(val: any) => `$${formatCompact(val ?? 0)}`} />
-                                    <Area type="monotone" dataKey="funded" stroke={C.accent} fillOpacity={1} fill="url(#gradFunded)" stackId="1" name="Funded" />
-                                    <Area type="monotone" dataKey="gap" stroke={C.accentSecondary} fillOpacity={1} fill="url(#gradGap)" stackId="1" name="Unfunded" />
-                                </AreaChart>
-                            </ResponsiveContainer>
-                        </ChartCard>
+                {/* Chart Section: Aggressive Minimalism */}
+                <section className="space-y-8">
+                    <div className="text-[10px] font-bold tracking-[0.3em] text-[var(--dash-text-muted)] uppercase">
+                        SEVERITY_DISTRIBUTION_ALGORITHM
                     </div>
+                    <div className="h-[400px] w-full border border-[var(--dash-border)] bg-[var(--dash-surface)] p-8">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={topCrises} margin={{ top: 20, right: 30, left: 20, bottom: 40 }}>
+                                <XAxis
+                                    dataKey="label"
+                                    stroke="var(--dash-border)"
+                                    tick={{ fill: 'var(--dash-text-muted)', fontSize: 9, fontWeight: 700 }}
+                                    interval={0}
+                                    angle={-45}
+                                    textAnchor="end"
+                                />
+                                <YAxis
+                                    stroke="var(--dash-border)"
+                                    tick={{ fill: 'var(--dash-text-muted)', fontSize: 9 }}
+                                />
+                                <Tooltip
+                                    contentStyle={customTooltipStyle}
+                                    cursor={{ fill: 'rgba(255,255,255,0.03)' }}
+                                />
+                                <Bar
+                                    dataKey="trend"
+                                    fill="var(--dash-text)"
+                                    radius={[0, 0, 0, 0]}
+                                    barSize={32}
+                                    className="hover:opacity-80 transition-opacity"
+                                />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+                </section>
 
-                    {/* Right column: benchmark + radar */}
-                    <div className="xl:col-span-1 flex flex-col gap-6">
+                {/* Bottom Section: Actian Benchmark in minimalist shell */}
+                <footer className="pt-12 border-t border-[var(--dash-border)]">
+                    <div className="max-w-2xl">
+                        <h3 className="text-lg font-medium tracking-tight uppercase mb-8">Performance Benchmarking</h3>
                         <ActianBenchmark />
-
-                        <ChartCard title="Crisis Type Breakdown" subtitle="Average severity and cumulative funding gaps by crisis category.">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <RadarChart cx="50%" cy="50%" outerRadius="68%" data={radarData}>
-                                    <PolarGrid stroke={C.border} />
-                                    <PolarAngleAxis dataKey="subject" tick={axisTickStyle} />
-                                    <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
-                                    <Radar name="Severity" dataKey="severityScale" stroke={C.accent} fill={C.accent} fillOpacity={0.5} />
-                                    <Radar name="Funding Gap" dataKey="gapScale" stroke={C.accentSecondary} fill={C.accentSecondary} fillOpacity={0.3} />
-                                    <Tooltip contentStyle={tooltipStyle} />
-                                </RadarChart>
-                            </ResponsiveContainer>
-                        </ChartCard>
                     </div>
-                </div>
-            </div>
-        </div>
-    );
-}
+                </footer>
 
-function ChartCard({
-    title,
-    subtitle,
-    children,
-}: {
-    title: string;
-    subtitle?: string;
-    children: React.ReactNode;
-}) {
-    return (
-        <div
-            className="rounded-lg border p-5 flex-1 min-h-[340px] flex flex-col"
-            style={{ backgroundColor: C.surface, borderColor: C.border }}
-        >
-            <div className="mb-4">
-                <h3
-                    className="text-sm font-semibold tracking-[-0.01em]"
-                    style={{ color: C.text }}
-                >
-                    {title}
-                </h3>
-                {subtitle && (
-                    <p className="text-[11px] mt-0.5 leading-relaxed" style={{ color: C.textMuted }}>
-                        {subtitle}
-                    </p>
-                )}
-            </div>
-            <div className="flex-1 w-full min-h-0">
-                {children}
             </div>
         </div>
     );

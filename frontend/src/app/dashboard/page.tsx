@@ -14,54 +14,38 @@ export default function DashboardPage() {
                     style={{ backgroundColor: "#0a0e14", color: "rgba(255,255,255,0.9)" }}
                 >
                     <header
-                        className="border-b sticky top-0 z-30 backdrop-blur-md"
-                        style={{
-                            borderColor: "rgba(255,255,255,0.08)",
-                            backgroundColor: "rgba(13,17,23,0.85)",
-                        }}
+                        className="border-b sticky top-0 z-30 backdrop-blur-xl border-[var(--dash-border)] bg-black/80"
                     >
-                        <div className="max-w-[1600px] mx-auto px-6 lg:px-8 h-14 flex items-center justify-between">
-                            <div className="flex items-center gap-3">
+                        <div className="max-w-[1600px] mx-auto px-12 h-16 flex items-center justify-between">
+                            <div className="flex items-center gap-6">
                                 <h1
-                                    className="text-[15px] font-semibold tracking-[-0.01em]"
-                                    style={{ color: "rgba(255,255,255,0.9)" }}
+                                    className="text-xs font-bold tracking-[0.4em] uppercase text-white"
                                 >
-                                    Crisis Topography
+                                    Analytical Engine
                                 </h1>
+                                <div className="h-4 w-px bg-[var(--dash-border)]" />
                                 <span
-                                    className="text-xs font-medium px-2 py-0.5 rounded-full"
-                                    style={{
-                                        color: "rgba(255,255,255,0.3)",
-                                        backgroundColor: "#161b22",
-                                    }}
+                                    className="text-[10px] font-medium tracking-widest text-[var(--dash-text-muted)] uppercase"
                                 >
-                                    Analytics
+                                    Global Monitor
                                 </span>
                             </div>
-                            <div className="flex items-center gap-4">
-                                <span
-                                    className="text-xs"
-                                    style={{ color: "rgba(255,255,255,0.3)" }}
-                                >
-                                    {new Date().getFullYear()} Global Overview
-                                </span>
-                                <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-8">
+                                <div className="flex items-center gap-2">
                                     <div
-                                        className="w-1.5 h-1.5 rounded-full"
-                                        style={{ backgroundColor: "#00d4ff" }}
+                                        className="w-1 h-1 rounded-full bg-white animate-pulse"
                                     />
                                     <span
-                                        className="text-xs font-medium"
-                                        style={{ color: "#00d4ff" }}
+                                        className="text-[10px] font-mono text-white tracking-tighter"
                                     >
-                                        Live
+                                        S_LINK_ACTIVE
                                     </span>
                                 </div>
                             </div>
                         </div>
                     </header>
 
-                    <main className="flex-1 w-full">
+                    <main className="flex-1 w-full bg-black">
                         <DatabricksDashboard />
                     </main>
                     <VoiceAgent />
