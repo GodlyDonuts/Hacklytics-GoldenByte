@@ -210,12 +210,14 @@ export default function GlobeView() {
     return geoJsonRef.current.map((feat) => {
       const iso = feat.properties.ISO_A3 as string;
       const metrics = countryMetrics.get(iso);
+      const hasRealCrisis = metrics !== undefined;
+
       return {
         ...feat,
-        __severity: metrics?.severity ?? 0,
+        __severity: metrics?.severity ?? 1,
         __fundingGapNorm: metrics?.fundingGap ?? 0,
         __oversightScore: metrics?.oversightScore ?? 0,
-        __hasCrisis: metrics !== undefined,
+        __hasCrisis: true,
       };
     });
   }, [countryMetrics, geoReady]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -443,7 +445,7 @@ export default function GlobeView() {
     return {
       name: (feat.properties.NAME as string) ?? hoveredIso,
       iso: hoveredIso,
-      severity: metrics?.severity ?? 0,
+      severity: metrics?.severity ?? 1,
       oversightScore: metrics?.oversightScore ?? 0,
       fundingGap: metrics?.fundingGap ?? 0,
       crisisCount,
@@ -471,6 +473,25 @@ export default function GlobeView() {
           </div>
         </div>
       )}
+
+      {/* Legend */}
+      <div className="absolute bottom-4 left-4 rounded-lg border border-[#00d4ff]/30 bg-[#1a1d21]/80 px-4 py-3 text-xs text-white/80 backdrop-blur-sm z-10 flex flex-col gap-2 pointer-events-none">
+        <div className="font-semibold text-[#00e5ff] uppercase tracking-wider mb-1">
+          {viewMode === "funding-gap" ? "Funding Gap" : viewMode === "anomalies" ? "Oversight/Anomalies" : "Severity Index"}
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="h-3 w-32 rounded-full" style={{
+            background: `linear-gradient(to right, ${(viewMode === "funding-gap" ? FUNDING_GAP_STOPS : viewMode === "anomalies" ? OVERSIGHT_STOPS : SEVERITY_STOPS)
+                .map(stop => `rgb(${stop[1]}, ${stop[2]}, ${stop[3]}) ${stop[0] * 100}%`)
+                .join(", ")
+              })`
+          }} />
+        </div>
+        <div className="flex justify-between w-32 text-[10px] text-white/50">
+          <span>{viewMode === "funding-gap" ? "Funded" : viewMode === "anomalies" ? "Covered" : "Low (1)"}</span>
+          <span>{viewMode === "funding-gap" ? "Critical" : viewMode === "anomalies" ? "Overlooked" : "High (5)"}</span>
+        </div>
+      </div>
 
       {loadingRisks && viewMode === "predictive-risks" && (
         <div className="absolute top-20 left-1/2 -translate-x-1/2 bg-black/80 border border-blue-500/50 rounded-lg px-6 py-3 text-sm text-blue-400 font-mono flex items-center gap-3">
