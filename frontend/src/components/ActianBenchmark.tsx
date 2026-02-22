@@ -1,12 +1,24 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { benchmarkProject, BenchmarkResponse, BenchmarkNeighbor } from "@/lib/api";
+import { useState } from "react";
+import { benchmarkProject, type BenchmarkResponse } from "@/lib/api";
+
+const C = {
+    bg: "#0a0e14",
+    surface: "#0d1117",
+    elevated: "#161b22",
+    text: "rgba(255,255,255,0.9)",
+    textMuted: "rgba(255,255,255,0.3)",
+    textSecondary: "rgba(255,255,255,0.5)",
+    border: "rgba(255,255,255,0.08)",
+    accent: "#00d4ff",
+    accentSecondary: "#00e5a0",
+} as const;
 
 export default function ActianBenchmark({
     onClose
 }: {
-    onClose?: () => void
+    onClose?: () => void;
 }) {
     const [projectCode, setProjectCode] = useState("");
     const [loading, setLoading] = useState(false);
@@ -28,100 +40,145 @@ export default function ActianBenchmark({
     };
 
     return (
-        <div className="bg-[var(--phase-bg-surface)] border border-[var(--phase-border)] transition-colors duration-[600ms] rounded-xl flex flex-col h-full overflow-hidden shadow-2xl">
-            <div className="p-4 border-b transition-colors duration-[600ms] flex justify-between items-center" style={{ borderColor: 'var(--phase-border)', backgroundColor: 'var(--phase-bg)' }}>
-                <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: 'var(--phase-accent)' }} />
-                    <h3 className="text-sm font-semibold uppercase tracking-widest" style={{ color: 'var(--phase-text)' }}>
-                        Actian VectorDB Benchmark
-                    </h3>
-                </div>
+        <div
+            className="rounded-lg border flex flex-col h-full overflow-hidden"
+            style={{ backgroundColor: C.surface, borderColor: C.border }}
+        >
+            {/* Header */}
+            <div
+                className="px-5 py-3.5 border-b flex justify-between items-center"
+                style={{ borderColor: C.border }}
+            >
+                <h3 className="text-sm font-semibold tracking-[-0.01em]" style={{ color: C.text }}>
+                    Project Benchmark
+                </h3>
                 {onClose && (
-                    <button onClick={onClose} className="text-gray-500 hover:text-gray-300 transition-colors">
-                        ✕
+                    <button
+                        onClick={onClose}
+                        className="w-6 h-6 flex items-center justify-center rounded transition-colors"
+                        style={{ color: C.textMuted }}
+                    >
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                            <path d="M3 3l8 8M11 3l-8 8" />
+                        </svg>
                     </button>
                 )}
             </div>
 
-            <div className="p-4 border-b transition-colors duration-[600ms]" style={{ borderColor: 'var(--phase-border)', backgroundColor: 'rgba(var(--phase-bg-rgb, 13, 17, 23), 0.5)' }}>
-                <label className="block text-xs mb-2 uppercase tracking-wide" style={{ color: 'var(--phase-text-muted)' }}>
-                    Target Query
-                </label>
+            {/* Search */}
+            <div className="px-5 py-4 border-b" style={{ borderColor: C.border }}>
                 <div className="flex gap-2">
                     <input
                         type="text"
                         value={projectCode}
                         onChange={(e) => setProjectCode(e.target.value)}
                         onKeyDown={(e) => e.key === "Enter" && handleBenchmark()}
-                        placeholder="e.g. Afghanistan, Health, or CBPF-AFG-24..."
-                        className="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none transition-colors focus:ring-1 font-mono"
-                        style={{ backgroundColor: 'rgba(0,0,0,0.5)', borderColor: 'var(--phase-border)', color: 'var(--phase-text)' }}
+                        placeholder="Country, sector, or project code..."
+                        className="flex-1 border rounded-md px-3 py-2 text-sm focus:outline-none transition-colors"
+                        style={{
+                            backgroundColor: C.bg,
+                            borderColor: C.border,
+                            color: C.text,
+                        }}
                     />
                     <button
                         onClick={handleBenchmark}
                         disabled={loading || !projectCode.trim()}
-                        className="px-4 py-2 border disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium transition-all"
-                        style={{ backgroundColor: 'rgba(45, 212, 168, 0.1)', borderColor: 'var(--phase-accent)', color: 'var(--phase-accent)' }}
+                        className="px-3.5 py-2 rounded-md text-sm font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                        style={{
+                            backgroundColor: C.accent,
+                            color: "#0a0e14",
+                        }}
                     >
-                        {loading ? "Searching..." : "Vector Search"}
+                        {loading ? "Searching..." : "Search"}
                     </button>
                 </div>
-                <p className="text-[10px] mt-2" style={{ color: 'var(--phase-text-muted)' }}>
-                    Searches 8,000+ embedded OCHA projects for high-ROI comparisons using Actian similarity search.
+                <p className="text-[11px] mt-2 leading-relaxed" style={{ color: C.textMuted }}>
+                    Find similar OCHA projects by vector similarity across 8,000+ embedded interventions.
                 </p>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 transition-colors duration-[600ms]" style={{ backgroundColor: 'var(--phase-bg)' }}>
+            {/* Results */}
+            <div className="flex-1 overflow-y-auto px-5 py-4" style={{ backgroundColor: C.bg }}>
                 {error && (
-                    <div className="p-3 border rounded-lg text-red-400 text-xs" style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', borderColor: 'rgba(239, 68, 68, 0.3)' }}>
+                    <div
+                        className="p-3 rounded-md text-sm text-red-400 border"
+                        style={{ backgroundColor: "rgba(239, 68, 68, 0.06)", borderColor: "rgba(239, 68, 68, 0.15)" }}
+                    >
                         {error}
                     </div>
                 )}
 
                 {result && (
                     <div className="space-y-4">
-                        <div className="p-3 border rounded-lg transition-colors duration-[600ms]" style={{ backgroundColor: 'var(--phase-bg-surface)', borderColor: 'var(--phase-border)' }}>
-                            <h4 className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--phase-text-muted)' }}>Target Match</h4>
-                            <div className="text-sm font-medium" style={{ color: 'var(--phase-text)' }}>
+                        {/* Matched project */}
+                        <div
+                            className="p-3.5 rounded-md border"
+                            style={{ backgroundColor: C.surface, borderColor: C.border }}
+                        >
+                            <p className="text-[11px] font-medium mb-1" style={{ color: C.textMuted }}>
+                                Matched project
+                            </p>
+                            <p className="text-sm font-medium" style={{ color: C.text }}>
                                 {result.query_project.project_name || result.query_project.project_code}
-                            </div>
-                            <div className="flex items-center gap-4 mt-2 text-xs" style={{ color: 'var(--phase-text-muted)' }}>
-                                <span>Cluster: <span style={{ color: 'var(--phase-text)' }}>{result.query_project.cluster}</span></span>
-                                <span>B2B: <span style={{ color: 'var(--phase-accent)' }}>${result.query_project.cost_per_beneficiary?.toFixed(2)}</span> / ben</span>
+                            </p>
+                            <div className="flex items-center gap-4 mt-2 text-xs" style={{ color: C.textMuted }}>
+                                <span>{result.query_project.cluster}</span>
+                                <span className="tabular-nums" style={{ color: C.accent }}>
+                                    ${result.query_project.cost_per_beneficiary?.toFixed(2)}/beneficiary
+                                </span>
                             </div>
                         </div>
 
+                        {/* AI insight */}
                         {result.insight && (
-                            <div className="p-3 border rounded-lg transition-colors duration-[600ms]" style={{ backgroundColor: 'rgba(155, 109, 255, 0.1)', borderColor: 'var(--phase-accent-secondary)' }}>
-                                <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--phase-accent-secondary)' }}>
-                                    <span className="text-lg">✨</span> OpenRouter Analysis
-                                </h4>
-                                <p className="text-xs leading-relaxed" style={{ color: 'var(--phase-text)' }}>
+                            <div
+                                className="p-3.5 rounded-md border"
+                                style={{
+                                    backgroundColor: "rgba(0,212,255,0.06)",
+                                    borderColor: "rgba(0,212,255,0.15)",
+                                }}
+                            >
+                                <p className="text-[11px] font-medium mb-1" style={{ color: C.accent }}>
+                                    Analysis
+                                </p>
+                                <p className="text-xs leading-relaxed" style={{ color: C.text }}>
                                     {result.insight}
                                 </p>
                             </div>
                         )}
 
+                        {/* Neighbors */}
                         <div>
-                            <h4 className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--phase-text-muted)' }}>
-                                Top Value Comparables ({result.neighbors.length})
-                            </h4>
-                            <div className="space-y-2">
+                            <p className="text-[11px] font-medium mb-2.5" style={{ color: C.textMuted }}>
+                                Similar projects ({result.neighbors.length})
+                            </p>
+                            <div className="space-y-1.5">
                                 {result.neighbors.map((n, i) => (
-                                    <div key={n.project_code || i} className="p-3 border border-transparent transition-colors rounded-lg group" style={{ backgroundColor: 'rgba(0,0,0,0.4)', borderColor: 'var(--phase-border)' }}>
-                                        <div className="flex justify-between items-start mb-1">
-                                            <div className="text-xs font-medium pr-4 line-clamp-2" style={{ color: 'var(--phase-text)' }}>
+                                    <div
+                                        key={n.project_code || i}
+                                        className="p-3 rounded-md border"
+                                        style={{ backgroundColor: C.surface, borderColor: C.border }}
+                                    >
+                                        <div className="flex justify-between items-start gap-3 mb-1">
+                                            <p className="text-xs font-medium line-clamp-2" style={{ color: C.text }}>
                                                 {n.project_name || n.project_code}
-                                            </div>
-                                            <div className="text-xs font-mono px-1.5 py-0.5 rounded border transition-colors duration-[600ms]" style={{ color: 'var(--phase-accent)', backgroundColor: 'rgba(45, 212, 168, 0.1)', borderColor: 'var(--phase-accent)' }}>
-                                                {((n.similarity_score ?? 0) * 100).toFixed(1)}% Sim
-                                            </div>
+                                            </p>
+                                            <span
+                                                className="text-[10px] tabular-nums font-medium px-1.5 py-0.5 rounded shrink-0"
+                                                style={{
+                                                    color: C.accentSecondary,
+                                                    backgroundColor: "rgba(0,229,160,0.1)",
+                                                }}
+                                            >
+                                                {((n.similarity_score ?? 0) * 100).toFixed(1)}%
+                                            </span>
                                         </div>
-                                        <div className="flex items-center gap-3 text-[10px]" style={{ color: 'var(--phase-text-muted)' }}>
-                                            <span className="font-mono px-1.5 rounded" style={{ color: 'var(--phase-text)', backgroundColor: 'var(--phase-border)' }}>{n.iso3}</span>
+                                        <div className="flex items-center gap-2.5 text-[11px]" style={{ color: C.textMuted }}>
+                                            <span className="font-medium tabular-nums">{n.iso3}</span>
                                             <span>{n.cluster}</span>
-                                            <span className="ml-auto font-mono text-xs" style={{ color: 'var(--phase-accent)' }}>
-                                                ${n.cost_per_beneficiary?.toFixed(2)} / ben
+                                            <span className="ml-auto tabular-nums" style={{ color: C.accent }}>
+                                                ${n.cost_per_beneficiary?.toFixed(2)}/ben
                                             </span>
                                         </div>
                                     </div>
@@ -132,12 +189,12 @@ export default function ActianBenchmark({
                 )}
 
                 {!result && !error && !loading && (
-                    <div className="h-full flex flex-col items-center justify-center text-sm py-12" style={{ color: 'var(--phase-text-muted)' }}>
-                        <svg className="w-12 h-12 mb-4 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 002-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                    <div className="h-full flex flex-col items-center justify-center py-12" style={{ color: C.textMuted }}>
+                        <svg className="w-10 h-10 mb-3 opacity-15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
                         </svg>
-                        <p className="text-center max-w-[200px]">
-                            Enter a search query or a project code to find historically successful interventions with high ROI.
+                        <p className="text-sm text-center max-w-[200px] leading-relaxed">
+                            Search for a project or keyword to find similar high-ROI interventions.
                         </p>
                     </div>
                 )}

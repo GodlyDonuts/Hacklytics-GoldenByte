@@ -2,17 +2,24 @@
 
 import { useEffect, useState, useMemo } from "react";
 import {
-    BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-    CartesianGrid, ScatterChart, Scatter, LineChart, Line, ComposedChart, Area,
+    Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
+    CartesianGrid, ScatterChart, Scatter, Line, ComposedChart, Area,
     Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, AreaChart
 } from "recharts";
-import { getGlobeCrises, askQuestion, type GlobeCountry } from "@/lib/api";
+import { getGlobeCrises, type GlobeCountry } from "@/lib/api";
 import ActianBenchmark from "./ActianBenchmark";
 
-const CHART_COLORS = [
-    "#00d4ff", "#7C3AED", "#DB2777", "#D97706", "#059669",
-    "#0891B2", "#DC2626", "#65A30D"
-];
+const C = {
+    bg: "#0a0e14",
+    surface: "#0d1117",
+    elevated: "#161b22",
+    text: "rgba(255,255,255,0.9)",
+    textMuted: "rgba(255,255,255,0.3)",
+    textSecondary: "rgba(255,255,255,0.5)",
+    border: "rgba(255,255,255,0.08)",
+    accent: "#00d4ff",
+    accentSecondary: "#00e5a0",
+} as const;
 
 function formatCompact(v: number | null): string {
     if (v === null || v === undefined) return "--";
@@ -22,15 +29,19 @@ function formatCompact(v: number | null): string {
     return Number.isInteger(v) ? String(v) : v.toFixed(1);
 }
 
-// Custom Tooltip Styles for Dark Terminal Look
-const tooltipStyle = {
-    backgroundColor: "var(--phase-bg-elevated)",
-    borderColor: "var(--phase-border)",
-    color: "var(--phase-text)",
-    borderRadius: "8px",
-    boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.5)",
-    fontFamily: "monospace",
+const tooltipStyle: React.CSSProperties = {
+    backgroundColor: C.elevated,
+    borderColor: C.border,
+    color: C.text,
+    borderRadius: "6px",
+    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.15)",
     fontSize: "12px",
+    padding: "8px 12px",
+};
+
+const axisTickStyle = {
+    fill: C.textMuted,
+    fontSize: 11,
 };
 
 interface DashboardProps {
@@ -67,7 +78,6 @@ export default function DatabricksDashboard({
         const allCrises = countries.flatMap((c) => c.crises);
         const totalPeopleInNeed = allCrises.reduce((sum, c) => sum + (c.people_in_need ?? 0), 0);
         const totalFundingGap = allCrises.reduce((sum, c) => sum + (c.funding_gap_usd ?? 0), 0);
-        const totalRequested = allCrises.reduce((sum, c) => sum + ((c.funding_gap_usd ?? 0) / (1 - (c.funding_coverage_pct ?? 0) / 100 || 1)), 0);
 
         let avgHri = 0;
         let validHri = 0;
@@ -87,7 +97,6 @@ export default function DatabricksDashboard({
         };
     }, [countries]);
 
-    // Data for Capital Gap Scatter (Gap vs Severity)
     const scatterData = useMemo(() => {
         return countries.flatMap((c) =>
             c.crises.map((crisis) => ({
@@ -100,19 +109,17 @@ export default function DatabricksDashboard({
         ).filter(d => d.y > 0);
     }, [countries]);
 
-    // Data for Humanitarian Risk Index (HRI) - Top 15 by Oversight Score
     const hriData = useMemo(() => {
         return countries.flatMap(c => c.crises.map(crisis => ({
             name: c.iso3,
             fullName: c.country_name,
             crisisName: crisis.crisis_name,
-            hri: crisis.oversight_score ?? 0, // Oversight score maps to HRI
-            volatility: (100 - (crisis.funding_coverage_pct ?? 0)) / 100, // Inverse of coverage
+            hri: crisis.oversight_score ?? 0,
+            volatility: (100 - (crisis.funding_coverage_pct ?? 0)) / 100,
             gap: crisis.funding_gap_usd ?? 0
         }))).sort((a, b) => b.hri - a.hri).slice(0, 15);
     }, [countries]);
 
-    // Data for Area Chart: Funding vs Gap over Top 10 Countries
     const areaData = useMemo(() => {
         return countries
             .map(c => {
@@ -129,12 +136,11 @@ export default function DatabricksDashboard({
             .slice(0, 15);
     }, [countries]);
 
-    // Data for Radar Chart: Cluster Vulnerabilities globally
     const radarData = useMemo(() => {
         const clusterMap = new Map<string, { severity: number; gap: number; count: number }>();
         countries.forEach(c => {
             c.crises.forEach(cr => {
-                const type = cr.crisis_type || "Unknown";
+                const type = cr.severity_class || "Unknown";
                 const curr = clusterMap.get(type) || { severity: 0, gap: 0, count: 0 };
                 curr.severity += (cr.acaps_severity ?? 0);
                 curr.gap += (cr.funding_gap_usd ?? 0);
@@ -144,8 +150,8 @@ export default function DatabricksDashboard({
         });
         const arr = Array.from(clusterMap.entries()).map(([subject, stats]) => ({
             subject: subject.slice(0, 15),
-            severityScale: (stats.severity / stats.count) * 20, // Scale 0-5 to 0-100
-            gapScale: Math.min(100, (stats.gap / 1_000_000_000) * 10), // Scale billions to 100
+            severityScale: (stats.severity / stats.count) * 20,
+            gapScale: Math.min(100, (stats.gap / 1_000_000_000) * 10),
             fullMark: 100
         }));
         return arr.slice(0, 6);
@@ -153,10 +159,10 @@ export default function DatabricksDashboard({
 
     if (loading) {
         return (
-            <div className={`flex items-center justify-center min-h-[600px] bg-[var(--phase-bg)] transition-colors duration-[600ms] ${className}`}>
-                <div className="flex flex-col items-center gap-4">
-                    <div className="w-8 h-8 border-2 border-[var(--phase-border)] border-t-[var(--phase-accent)] rounded-full animate-spin" />
-                    <p className="text-sm font-mono" style={{ color: 'var(--phase-accent)' }}>CONNECTING TO ACTIAN VECTOR DB...</p>
+            <div className={`flex items-center justify-center min-h-[600px] ${className}`} style={{ backgroundColor: C.bg }}>
+                <div className="flex flex-col items-center gap-3">
+                    <div className="w-6 h-6 border-2 rounded-full animate-spin" style={{ borderColor: C.border, borderTopColor: C.accent }} />
+                    <p className="text-sm" style={{ color: C.textMuted }}>Loading crisis data...</p>
                 </div>
             </div>
         );
@@ -164,197 +170,245 @@ export default function DatabricksDashboard({
 
     if (error) {
         return (
-            <div className={`flex items-center justify-center min-h-[600px] bg-[var(--phase-bg)] transition-colors duration-[600ms] ${className}`}>
-                <div className="bg-[var(--phase-bg-surface)] border border-[var(--phase-border)] rounded-lg p-8 text-center max-w-md font-mono">
-                    <p className="text-sm text-red-500 mb-2">[SYS_ERR] CONNECTION FAILED</p>
-                    <p className="text-xs" style={{ color: 'var(--phase-text-muted)' }}>{error}</p>
+            <div className={`flex items-center justify-center min-h-[600px] ${className}`} style={{ backgroundColor: C.bg }}>
+                <div className="rounded-lg p-8 text-center max-w-md border" style={{ backgroundColor: C.surface, borderColor: C.border }}>
+                    <p className="text-sm font-medium text-red-400 mb-2">Unable to load data</p>
+                    <p className="text-xs leading-relaxed" style={{ color: C.textMuted }}>{error}</p>
+                    <button
+                        onClick={() => loadData()}
+                        className="mt-4 px-4 py-1.5 text-xs font-medium rounded-md transition-colors"
+                        style={{ backgroundColor: C.elevated, color: C.text }}
+                    >
+                        Retry
+                    </button>
                 </div>
             </div>
         );
     }
 
-    return (
-        <div className={`min-h-screen bg-[var(--phase-bg)] transition-colors duration-[600ms] p-6 font-sans ${className}`} style={{ color: 'var(--phase-text)' }}>
-            <div className="max-w-[1600px] mx-auto space-y-6">
+    const metricCards = [
+        { label: "Countries affected", value: String(metrics.totalCountries) },
+        { label: "Active crises", value: String(metrics.activeCrises) },
+        { label: "Funding gap", value: "$" + formatCompact(metrics.totalFundingGap), accent: true },
+        { label: "People in need", value: formatCompact(metrics.totalPeopleInNeed) },
+        { label: "Avg. oversight score", value: (metrics.avgHri * 100).toFixed(1) },
+    ];
 
-                {/* Header Metrics */}
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                    {[
-                        { label: "ACTIVE ZONES", value: metrics.totalCountries, color: "text-blue-400" },
-                        { label: "CRISIS VECTORS", value: metrics.activeCrises, color: "text-purple-400" },
-                        { label: "CAPITAL REQUIRED", value: "$" + formatCompact(metrics.totalFundingGap), color: "text-red-400" },
-                        { label: "POP. IMPACTED", value: formatCompact(metrics.totalPeopleInNeed), color: "text-orange-400" },
-                        { label: "GLOBAL HRI AVG", value: (metrics.avgHri * 100).toFixed(1), color: "var(--phase-accent)" },
-                    ].map((m, i) => (
-                        <div key={i} className="bg-[var(--phase-bg-surface)] border border-[var(--phase-border)] transition-colors duration-[600ms] p-4 rounded-xl flex flex-col justify-center">
-                            <p className="text-[10px] uppercase tracking-widest font-bold mb-1" style={{ color: 'var(--phase-text-muted)' }}>{m.label}</p>
-                            <p className={`text-2xl font-bold tracking-tight font-mono`} style={{ color: m.color }}>{m.value}</p>
+    return (
+        <div className={className} style={{ backgroundColor: C.bg, color: C.text }}>
+            <div className="max-w-[1600px] mx-auto px-6 lg:px-8 py-8 space-y-8">
+
+                {/* Metric cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                    {metricCards.map((m, i) => (
+                        <div
+                            key={i}
+                            className="rounded-lg p-4 border"
+                            style={{ backgroundColor: C.surface, borderColor: C.border }}
+                        >
+                            <p className="text-[11px] font-medium mb-1.5" style={{ color: C.textMuted }}>
+                                {m.label}
+                            </p>
+                            <p
+                                className="text-2xl font-semibold tracking-tight tabular-nums"
+                                style={{ color: m.accent ? C.accent : C.text }}
+                            >
+                                {m.value}
+                            </p>
                         </div>
                     ))}
                 </div>
 
-                {/* Main Grid Layout */}
+                {/* Charts grid */}
                 <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
 
-                    {/* Left & Center Columns: Charts */}
+                    {/* Left column: main charts */}
                     <div className="xl:col-span-2 space-y-6 flex flex-col">
 
-                        {/* Capital Gap Scatter */}
-                        <div className="bg-[var(--phase-bg-surface)] border border-[var(--phase-border)] transition-colors duration-[600ms] rounded-xl p-5 flex-1 min-h-[350px] shadow-2xl flex flex-col">
-                            <div className="flex justify-between items-center mb-4">
-                                <h3 className="text-sm font-semibold uppercase tracking-widest flex items-center gap-2" style={{ color: 'var(--phase-text)' }}>
-                                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: 'var(--phase-accent)' }} />
-                                    Quantitative Capital Gap Matrix
-                                </h3>
-                                <div className="text-[10px] border px-2 py-1 rounded transition-colors duration-[600ms]" style={{ color: 'var(--phase-text-muted)', borderColor: 'var(--phase-border)', backgroundColor: 'var(--phase-bg)' }}>
-                                    Y: GAP (USD) | X: SEVERITY (0-5)
-                                </div>
-                            </div>
-                            <div className="flex-1 w-full">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
-                                        <CartesianGrid strokeDasharray="3 3" stroke="var(--phase-border)" vertical={false} />
-                                        <XAxis
-                                            dataKey="x"
-                                            type="number"
-                                            domain={[0, 5]}
-                                            tick={{ fill: "var(--phase-text-muted)", fontSize: 11, fontFamily: "monospace" }}
-                                            axisLine={{ stroke: "var(--phase-border)" }}
-                                            tickLine={{ stroke: "var(--phase-border)" }}
-                                        />
-                                        <YAxis
-                                            dataKey="y"
-                                            type="number"
-                                            tickFormatter={formatCompact}
-                                            tick={{ fill: "var(--phase-text-muted)", fontSize: 11, fontFamily: "monospace" }}
-                                            axisLine={{ stroke: "var(--phase-border)" }}
-                                            tickLine={{ stroke: "var(--phase-border)" }}
-                                            width={60}
-                                        />
-                                        <Tooltip
-                                            cursor={{ strokeDasharray: '3 3', stroke: '#8b949e' }}
-                                            contentStyle={tooltipStyle}
-                                            formatter={(value: any, name: any) => [
-                                                name === 'y' ? `$${formatCompact(value ?? 0)}` : value,
-                                                name === 'x' ? 'Severity' : 'Gap'
-                                            ]}
-                                        />
-                                        <Scatter data={scatterData} fill="var(--phase-accent)" fillOpacity={0.6} shape="circle" />
-                                    </ScatterChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </div>
+                        <ChartCard title="Funding Gap vs. Severity" subtitle="Each point represents a crisis, sized by affected population.">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <ScatterChart margin={{ top: 16, right: 16, bottom: 32, left: 24 }}>
+                                    <defs>
+                                        <filter id="glow">
+                                            <feGaussianBlur stdDeviation="2.5" result="blur" />
+                                            <feMerge>
+                                                <feMergeNode in="blur" />
+                                                <feMergeNode in="SourceGraphic" />
+                                            </feMerge>
+                                        </filter>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
+                                    <XAxis
+                                        dataKey="x"
+                                        type="number"
+                                        domain={[0, 5]}
+                                        name="Severity"
+                                        tick={axisTickStyle}
+                                        axisLine={{ stroke: C.border }}
+                                        tickLine={false}
+                                        label={{ value: "ACAPS Severity", position: "insideBottom", offset: -18, style: { fill: C.textSecondary, fontSize: 11 } }}
+                                    />
+                                    <YAxis
+                                        dataKey="y"
+                                        type="number"
+                                        name="Funding Gap"
+                                        tickFormatter={formatCompact}
+                                        tick={axisTickStyle}
+                                        axisLine={false}
+                                        tickLine={false}
+                                        width={64}
+                                        label={{ value: "Funding Gap (USD)", angle: -90, position: "insideLeft", offset: -8, style: { fill: C.textSecondary, fontSize: 11 } }}
+                                    />
+                                    <Tooltip
+                                        cursor={{ strokeDasharray: "3 3", stroke: C.textMuted }}
+                                        content={({ active, payload }) => {
+                                            if (!active || !payload?.length) return null;
+                                            const d = payload[0].payload;
+                                            return (
+                                                <div style={tooltipStyle}>
+                                                    <p style={{ color: C.accent, fontWeight: 600, marginBottom: 4 }}>{d.name}</p>
+                                                    <p style={{ color: C.text, fontSize: 11 }}>Severity: <span style={{ color: C.accent }}>{d.x.toFixed(1)}</span></p>
+                                                    <p style={{ color: C.text, fontSize: 11 }}>Funding gap: <span style={{ color: C.accentSecondary }}>${formatCompact(d.y)}</span></p>
+                                                    {d.z > 0 && <p style={{ color: C.text, fontSize: 11 }}>People in need: {formatCompact(d.z)}</p>}
+                                                </div>
+                                            );
+                                        }}
+                                    />
+                                    <Scatter
+                                        data={scatterData}
+                                        fill={C.accent}
+                                        fillOpacity={0.65}
+                                        stroke={C.accent}
+                                        strokeOpacity={0.3}
+                                        strokeWidth={4}
+                                        shape={(props: any) => {
+                                            const r = Math.max(4, Math.min(14, Math.sqrt((props.payload?.z ?? 0) / 100000)));
+                                            return <circle cx={props.cx} cy={props.cy} r={r} fill={C.accent} fillOpacity={0.65} stroke={C.accent} strokeOpacity={0.25} strokeWidth={r * 0.6} filter="url(#glow)" />;
+                                        }}
+                                    />
+                                </ScatterChart>
+                            </ResponsiveContainer>
+                        </ChartCard>
 
-                        {/* Humanitarian Risk Index (HRI) Combo Chart */}
-                        <div className="bg-[var(--phase-bg-surface)] border border-[var(--phase-border)] transition-colors duration-[600ms] rounded-xl p-5 flex-1 min-h-[350px] shadow-2xl flex flex-col">
-                            <div className="flex justify-between items-center mb-4">
-                                <h3 className="text-sm font-semibold uppercase tracking-widest flex items-center gap-2" style={{ color: 'var(--phase-text)' }}>
-                                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: 'var(--phase-accent-secondary)' }} />
-                                    Humanitarian Risk Index (HRI)
-                                </h3>
-                                <div className="text-[10px] border px-2 py-1 rounded transition-colors duration-[600ms]" style={{ color: 'var(--phase-text-muted)', borderColor: 'var(--phase-border)', backgroundColor: 'var(--phase-bg)' }}>
-                                    TOP 15 OVERLOOKED CRISES
-                                </div>
-                            </div>
-                            <div className="flex-1 w-full relative">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <ComposedChart data={hriData} margin={{ top: 20, right: 20, bottom: 20, left: 0 }}>
-                                        <CartesianGrid strokeDasharray="3 3" stroke="var(--phase-border)" vertical={false} />
-                                        <XAxis
-                                            dataKey="name"
-                                            tick={{ fill: "var(--phase-text-muted)", fontSize: 10, fontFamily: "monospace" }}
-                                            axisLine={{ stroke: "var(--phase-border)" }}
-                                            tickLine={{ stroke: "var(--phase-border)" }}
-                                        />
-                                        <YAxis
-                                            yAxisId="left"
-                                            tickFormatter={(val) => (val * 100).toFixed(0)}
-                                            tick={{ fill: "var(--phase-text-muted)", fontSize: 10, fontFamily: "monospace" }}
-                                            axisLine={false}
-                                            tickLine={false}
-                                            domain={[0, 1]}
-                                        />
-                                        <YAxis
-                                            yAxisId="right"
-                                            orientation="right"
-                                            tickFormatter={formatCompact}
-                                            tick={{ fill: "var(--phase-text-muted)", fontSize: 10, fontFamily: "monospace" }}
-                                            axisLine={false}
-                                            tickLine={false}
-                                        />
-                                        <Tooltip contentStyle={tooltipStyle} />
-                                        <Bar yAxisId="right" dataKey="gap" name="Funding Gap" fill="var(--phase-accent-secondary)" radius={[4, 4, 0, 0]} opacity={0.6} />
-                                        <Line yAxisId="left" type="monotone" dataKey="hri" name="HRI (Oversight)" stroke="var(--phase-accent)" strokeWidth={3} dot={{ fill: 'var(--phase-accent)', r: 4 }} />
-                                    </ComposedChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </div>
+                        <ChartCard title="Oversight Risk Index" subtitle="Top 15 most overlooked crises by oversight score, overlaid with their funding gaps.">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <ComposedChart data={hriData} margin={{ top: 16, right: 16, bottom: 16, left: 0 }}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
+                                    <XAxis
+                                        dataKey="name"
+                                        tick={axisTickStyle}
+                                        axisLine={{ stroke: C.border }}
+                                        tickLine={false}
+                                    />
+                                    <YAxis
+                                        yAxisId="left"
+                                        tickFormatter={(val) => (val * 100).toFixed(0)}
+                                        tick={axisTickStyle}
+                                        axisLine={false}
+                                        tickLine={false}
+                                        domain={[0, 1]}
+                                    />
+                                    <YAxis
+                                        yAxisId="right"
+                                        orientation="right"
+                                        tickFormatter={formatCompact}
+                                        tick={axisTickStyle}
+                                        axisLine={false}
+                                        tickLine={false}
+                                    />
+                                    <Tooltip contentStyle={tooltipStyle} />
+                                    <Bar yAxisId="right" dataKey="gap" name="Funding Gap" fill={C.accentSecondary} radius={[3, 3, 0, 0]} opacity={0.5} />
+                                    <Line yAxisId="left" type="monotone" dataKey="hri" name="Oversight Score" stroke={C.accent} strokeWidth={2} dot={{ fill: C.accent, r: 3 }} />
+                                </ComposedChart>
+                            </ResponsiveContainer>
+                        </ChartCard>
 
-                        {/* Top 15 Funding vs Gap (Area Chart) */}
-                        <div className="bg-[var(--phase-bg-surface)] border border-[var(--phase-border)] transition-colors duration-[600ms] rounded-xl p-5 flex-1 min-h-[350px] shadow-2xl flex flex-col">
-                            <div className="flex justify-between items-center mb-4">
-                                <h3 className="text-sm font-semibold uppercase tracking-widest flex items-center gap-2" style={{ color: 'var(--phase-text)' }}>
-                                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: 'var(--phase-accent)' }} />
-                                    Region Funding Tranch vs Gap
-                                </h3>
-                                <div className="text-[10px] border px-2 py-1 rounded transition-colors duration-[600ms]" style={{ color: 'var(--phase-text-muted)', borderColor: 'var(--phase-border)', backgroundColor: 'var(--phase-bg)' }}>
-                                    CUMULATIVE STACK ($)
-                                </div>
-                            </div>
-                            <div className="flex-1 w-full relative">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <AreaChart data={areaData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
-                                        <defs>
-                                            <linearGradient id="colorFunded" x1="0" y1="0" x2="0" y2="1">
-                                                <stop offset="5%" stopColor="var(--phase-accent)" stopOpacity={0.8} />
-                                                <stop offset="95%" stopColor="var(--phase-accent)" stopOpacity={0} />
-                                            </linearGradient>
-                                            <linearGradient id="colorGap" x1="0" y1="0" x2="0" y2="1">
-                                                <stop offset="5%" stopColor="var(--phase-accent-secondary)" stopOpacity={0.8} />
-                                                <stop offset="95%" stopColor="var(--phase-accent-secondary)" stopOpacity={0} />
-                                            </linearGradient>
-                                        </defs>
-                                        <XAxis dataKey="name" tick={{ fill: "var(--phase-text-muted)", fontSize: 10, fontFamily: "monospace" }} axisLine={{ stroke: "var(--phase-border)" }} tickLine={{ stroke: "var(--phase-border)" }} />
-                                        <YAxis tickFormatter={formatCompact} tick={{ fill: "var(--phase-text-muted)", fontSize: 10, fontFamily: "monospace" }} axisLine={false} tickLine={false} />
-                                        <CartesianGrid strokeDasharray="3 3" stroke="var(--phase-border)" vertical={false} />
-                                        <Tooltip contentStyle={tooltipStyle} formatter={(val: number) => `$${formatCompact(val)}`} />
-                                        <Area type="monotone" dataKey="funded" stroke="var(--phase-accent)" fillOpacity={1} fill="url(#colorFunded)" stackId="1" name="Funded" />
-                                        <Area type="monotone" dataKey="gap" stroke="var(--phase-accent-secondary)" fillOpacity={1} fill="url(#colorGap)" stackId="1" name="Unfunded Gap" />
-                                    </AreaChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </div>
-
+                        <ChartCard title="Funding Allocation by Region" subtitle="Top 15 countries by total requirements, showing funded portion vs. remaining gap.">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <AreaChart data={areaData} margin={{ top: 16, right: 24, left: 0, bottom: 0 }}>
+                                    <defs>
+                                        <linearGradient id="gradFunded" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor={C.accent} stopOpacity={0.6} />
+                                            <stop offset="95%" stopColor={C.accent} stopOpacity={0.02} />
+                                        </linearGradient>
+                                        <linearGradient id="gradGap" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor={C.accentSecondary} stopOpacity={0.6} />
+                                            <stop offset="95%" stopColor={C.accentSecondary} stopOpacity={0.02} />
+                                        </linearGradient>
+                                    </defs>
+                                    <XAxis
+                                        dataKey="name"
+                                        tick={axisTickStyle}
+                                        axisLine={{ stroke: C.border }}
+                                        tickLine={false}
+                                    />
+                                    <YAxis
+                                        tickFormatter={formatCompact}
+                                        tick={axisTickStyle}
+                                        axisLine={false}
+                                        tickLine={false}
+                                    />
+                                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
+                                    <Tooltip contentStyle={tooltipStyle} formatter={(val: any) => `$${formatCompact(val ?? 0)}`} />
+                                    <Area type="monotone" dataKey="funded" stroke={C.accent} fillOpacity={1} fill="url(#gradFunded)" stackId="1" name="Funded" />
+                                    <Area type="monotone" dataKey="gap" stroke={C.accentSecondary} fillOpacity={1} fill="url(#gradGap)" stackId="1" name="Unfunded" />
+                                </AreaChart>
+                            </ResponsiveContainer>
+                        </ChartCard>
                     </div>
 
-                    {/* Right Column: Actian Benchmark Component + Radar */}
+                    {/* Right column: benchmark + radar */}
                     <div className="xl:col-span-1 flex flex-col gap-6">
                         <ActianBenchmark />
 
-                        {/* Radar Chart: Cluster Vulnerabilities */}
-                        <div className="bg-[var(--phase-bg-surface)] border border-[var(--phase-border)] transition-colors duration-[600ms] rounded-xl p-5 shadow-2xl flex flex-col min-h-[400px]">
-                            <div className="flex justify-between items-center mb-4">
-                                <h3 className="text-sm font-semibold uppercase tracking-widest flex items-center gap-2" style={{ color: 'var(--phase-text)' }}>
-                                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: 'var(--phase-accent)' }} />
-                                    Cluster Vulnerability Matrix
-                                </h3>
-                            </div>
-                            <div className="flex-1 w-full relative -mt-4">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
-                                        <PolarGrid stroke="var(--phase-border)" />
-                                        <PolarAngleAxis dataKey="subject" tick={{ fill: "var(--phase-text-muted)", fontSize: 10, fontFamily: "monospace" }} />
-                                        <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
-                                        <Radar name="Severity (Relative)" dataKey="severityScale" stroke="var(--phase-accent)" fill="var(--phase-accent)" fillOpacity={0.6} />
-                                        <Radar name="Funding Gap ($B)" dataKey="gapScale" stroke="var(--phase-accent-secondary)" fill="var(--phase-accent-secondary)" fillOpacity={0.4} />
-                                        <Tooltip contentStyle={tooltipStyle} />
-                                    </RadarChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </div>
+                        <ChartCard title="Crisis Type Breakdown" subtitle="Average severity and cumulative funding gaps by crisis category.">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <RadarChart cx="50%" cy="50%" outerRadius="68%" data={radarData}>
+                                    <PolarGrid stroke={C.border} />
+                                    <PolarAngleAxis dataKey="subject" tick={axisTickStyle} />
+                                    <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
+                                    <Radar name="Severity" dataKey="severityScale" stroke={C.accent} fill={C.accent} fillOpacity={0.5} />
+                                    <Radar name="Funding Gap" dataKey="gapScale" stroke={C.accentSecondary} fill={C.accentSecondary} fillOpacity={0.3} />
+                                    <Tooltip contentStyle={tooltipStyle} />
+                                </RadarChart>
+                            </ResponsiveContainer>
+                        </ChartCard>
                     </div>
-
                 </div>
+            </div>
+        </div>
+    );
+}
+
+function ChartCard({
+    title,
+    subtitle,
+    children,
+}: {
+    title: string;
+    subtitle?: string;
+    children: React.ReactNode;
+}) {
+    return (
+        <div
+            className="rounded-lg border p-5 flex-1 min-h-[340px] flex flex-col"
+            style={{ backgroundColor: C.surface, borderColor: C.border }}
+        >
+            <div className="mb-4">
+                <h3
+                    className="text-sm font-semibold tracking-[-0.01em]"
+                    style={{ color: C.text }}
+                >
+                    {title}
+                </h3>
+                {subtitle && (
+                    <p className="text-[11px] mt-0.5 leading-relaxed" style={{ color: C.textMuted }}>
+                        {subtitle}
+                    </p>
+                )}
+            </div>
+            <div className="flex-1 w-full min-h-0">
+                {children}
             </div>
         </div>
     );
