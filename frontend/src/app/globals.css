@@ -196,10 +196,13 @@ body {
    AURORA ANIMATIONS (globe page)
    ═══════════════════════════════════════════ */
 @keyframes aurora-1 {
-  0%, 100% {
+
+  0%,
+  100% {
     transform: translateY(0) scale(1);
     opacity: 0.6;
   }
+
   50% {
     transform: translateY(-2vh) scale(1.1);
     opacity: 0.9;
@@ -207,10 +210,13 @@ body {
 }
 
 @keyframes aurora-2 {
-  0%, 100% {
+
+  0%,
+  100% {
     transform: translateY(0) scale(1) translateX(0);
     opacity: 0.5;
   }
+
   50% {
     transform: translateY(-1.5vh) scale(1.05) translateX(3vw);
     opacity: 0.8;
@@ -218,10 +224,13 @@ body {
 }
 
 @keyframes aurora-3 {
-  0%, 100% {
+
+  0%,
+  100% {
     transform: translateY(0) scale(1) translateX(0);
     opacity: 0.6;
   }
+
   50% {
     transform: translateY(-2.5vh) scale(1.15) translateX(-3vw);
     opacity: 0.9;
@@ -229,10 +238,13 @@ body {
 }
 
 @keyframes pulse-soft {
-  0%, 100% {
+
+  0%,
+  100% {
     opacity: 0.8;
     transform: scale(1);
   }
+
   50% {
     opacity: 1;
     transform: scale(1.1);
@@ -269,6 +281,7 @@ body {
   transform: translate(-50%, -100%);
   backdrop-filter: blur(8px);
 }
+
 .point-label div {
   line-height: 1.35;
 }
@@ -277,4 +290,12 @@ body {
 .data-filters-modal select.data-filters-select option {
   background: #1e2023;
   color: #00e5ff;
+}
+
+/* ═══════════════════════════════════════════
+   UTILITIES
+   ════════════════════════════════════==== */
+.hide-cursor,
+.hide-cursor * {
+  cursor: none !important;
 }

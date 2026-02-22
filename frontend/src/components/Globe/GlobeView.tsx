@@ -129,7 +129,7 @@ export default function GlobeView() {
   const [geoReady, setGeoReady] = useState(false);
   const [hoveredIso, setHoveredIso] = useState<string | null>(null);
 
-  const { selectedCountry, setSelectedCountry, flyToCoordinates, comparisonData, viewMode, filters, setFilters, predictiveRisks, setPredictiveRisks } =
+  const { selectedCountry, setSelectedCountry, flyToCoordinates, comparisonData, viewMode, filters, setFilters, predictiveRisks, setPredictiveRisks, isSpotlightActive } =
     useGlobeContext();
 
   const [loadingRisks, setLoadingRisks] = useState(false);
@@ -277,8 +277,8 @@ export default function GlobeView() {
       return;
     }
 
-    // Hover takes priority, then selected country, then voice-agent spotlight
-    const spotlight = hoveredIso ?? selectedCountry ?? spotlightIso;
+    // Hover takes priority, then selected country, then voice-agent spotlight (if active)
+    const spotlight = hoveredIso ?? selectedCountry ?? (isSpotlightActive ? spotlightIso : null);
 
     // Select the metric value (0-1) based on current view mode
     const metricForMode = (feat: CrisisFeature): number => {
@@ -598,8 +598,8 @@ export default function GlobeView() {
         <div className="flex items-center gap-2">
           <div className="h-3 w-32 rounded-full" style={{
             background: `linear-gradient(to right, ${(viewMode === "funding-gap" ? FUNDING_GAP_STOPS : viewMode === "anomalies" ? OVERSIGHT_STOPS : SEVERITY_STOPS)
-                .map(stop => `rgb(${stop[1]}, ${stop[2]}, ${stop[3]}) ${stop[0] * 100}%`)
-                .join(", ")
+              .map(stop => `rgb(${stop[1]}, ${stop[2]}, ${stop[3]}) ${stop[0] * 100}%`)
+              .join(", ")
               })`
           }} />
         </div>

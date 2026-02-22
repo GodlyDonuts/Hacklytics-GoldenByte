@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react';
 import { useConversation } from '@elevenlabs/react';
+import { useRouter } from 'next/navigation';
 import { useGlobeContext } from '@/context/GlobeContext';
 import { generateReport } from '@/lib/api';
 import { pushActivity, resolveActivity } from '@/components/Globe/AgentActivityFeed';
@@ -23,12 +24,14 @@ type VoiceChatContextValue = {
   isSpacePressed: boolean;
   isSpeaking: boolean;
   status: string;
+  isVoiceActive: boolean;
   startVoiceSession: () => Promise<void>;
 };
 
 const VoiceChatContext = createContext<VoiceChatContextValue | null>(null);
 
 export function VoiceAgentProvider({ children }: { children: ReactNode }) {
+  const router = useRouter();
   const [isSpacePressed, setIsSpacePressed] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
   const [textInput, setTextInput] = useState('');
@@ -63,8 +66,8 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
         if (parameters.iso3) {
           lastNavigatedIso3Ref.current = parameters.iso3;
           setSelectedCountry(parameters.iso3);
+          setIsSpotlightActive(true);
         }
-        setIsSpotlightActive(true);
         resolveActivity(aid, 'done', parameters.iso3 ? `Focused on ${parameters.iso3}` : undefined);
         return 'Successfully moved the globe.';
       },
@@ -176,9 +179,17 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
         setSelectedCountry(null);
         setIsSpotlightActive(false);
         lastNavigatedIso3Ref.current = null;
-        setFlyToCoordinates({ lat: 20, lng: 0, altitude: 2.5 });
+        setFlyToCoordinates(null);
         resolveActivity(aid, 'done');
         return 'Successfully reset the globe view to default.';
+      },
+      navigate_to_page: (parameters: any) => {
+        const page = typeof parameters === 'string' ? parameters : parameters.page;
+        const aid = pushActivity('navigate_to_page', 'Navigating', page);
+        const target = page === 'globe' ? '/globe' : '/dashboard';
+        router.push(target);
+        resolveActivity(aid, 'done');
+        return `Successfully navigated to the ${page}.`;
       },
       end_conversation: () => {
         console.log('AI called end_conversation');
@@ -206,6 +217,16 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
       console.error('Failed to start ElevenLabs session', err);
     }
   }, [conversation]);
+
+  const isVoiceActive = hasStarted && status === 'connected';
+
+  useEffect(() => {
+    if (isVoiceActive) {
+      document.body.classList.add('hide-cursor');
+    } else {
+      document.body.classList.remove('hide-cursor');
+    }
+  }, [isVoiceActive]);
 
   const startSessionForText = useCallback(async () => {
     try {
@@ -291,6 +312,7 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
     isSpacePressed,
     isSpeaking: conversation.isSpeaking ?? false,
     status: conversation.status,
+    isVoiceActive,
     startVoiceSession,
   };
 

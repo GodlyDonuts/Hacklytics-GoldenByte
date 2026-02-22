@@ -33,3 +33,8 @@ Pablo is the interactive ElevenLabs voice agent powering the Crisis Topography C
      - If focused on a specific country, it generates a deep-dive report on that country's crisis and funding mismatch.
      - If zoomed out (global focus), it generates a comprehensive global summary of the worst crises and anomalies.
      - Triggers a browser download of the generated PDF.
+
+6. **`navigate_to_page`**
+   - **Description**: Switches the user's current view between the 3D globe and the unified dashboard.
+   - **Usage**: "Show me the dashboard" or "Go back to the globe."
+   - **Action**: Uses the browser router to change paths without refreshing the session.
