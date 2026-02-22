@@ -270,8 +270,14 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
   const startVoiceSession = useCallback(async () => {
     try {
       if (conversation.status === 'connected' || conversation.status === 'connecting') return;
-      await navigator.mediaDevices.getUserMedia({ audio: true });
-      await conversation.startSession({ agentId: AGENT_ID, connectionType: 'websocket' });
+      await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      await conversation.startSession({ agentId: AGENT_ID, connectionType: 'webrtc' });
       setHasStarted(true);
     } catch (err) {
       console.error('Failed to start ElevenLabs session', err);
@@ -291,7 +297,7 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
   const startSessionForText = useCallback(async () => {
     try {
       if (conversation.status === 'connected' || conversation.status === 'connecting') return true;
-      await conversation.startSession({ agentId: AGENT_ID, connectionType: 'websocket' });
+      await conversation.startSession({ agentId: AGENT_ID, connectionType: 'webrtc' });
       setHasStarted(true);
       return true;
     } catch (err) {
