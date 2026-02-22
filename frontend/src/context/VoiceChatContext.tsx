@@ -171,21 +171,39 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
           });
         return `Generating a ${scope} PDF report now. It will download automatically in a moment.`;
       },
-      set_time_period: (parameters: { year: number; month?: number }) => {
-        const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-        if (parameters.year < 2022 || parameters.year > 2026) {
+      set_time_period: (parameters: { year?: number; month?: number }) => {
+        const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+        // Year is optional. If provided, validate it.
+        if (parameters.year != null && (parameters.year < 2022 || parameters.year > 2026)) {
           return 'Year must be between 2022 and 2026.';
         }
+
+        // Month is optional. If provided, validate it.
         if (parameters.month != null && (parameters.month < 1 || parameters.month > 12)) {
           return 'Month must be between 1 and 12.';
         }
-        const aid = pushActivity('set_time_period', 'Changing time period', parameters.month != null ? `${MONTH_NAMES[parameters.month - 1]} ${parameters.year}` : String(parameters.year));
+
+        if (parameters.year == null && parameters.month == null) {
+          return 'No date parameters provided.';
+        }
+
+        const aid = pushActivity('set_time_period', 'Changing time period',
+          parameters.month != null
+            ? `${MONTH_NAMES[parameters.month - 1]}${parameters.year ? ` ${parameters.year}` : ''}`
+            : String(parameters.year)
+        );
+
         setFilters(f => ({
           ...f,
-          year: parameters.year,
+          year: parameters.year ?? f.year,
           month: parameters.month ?? f.month,
         }));
-        const label = parameters.month != null ? `${MONTH_NAMES[parameters.month - 1]} ${parameters.year}` : String(parameters.year);
+
+        const label = parameters.month != null
+          ? `${MONTH_NAMES[parameters.month - 1]}${parameters.year ? ` ${parameters.year}` : ''}`
+          : String(parameters.year);
+
         resolveActivity(aid, 'done', label);
         return `Changed to ${label}`;
       },
