@@ -2,10 +2,14 @@
 import json
 import os
 import httpx
+from sentence_transformers import SentenceTransformer
+from cortex import AsyncCortexClient
 
 # Default vector search index (from REFACTOR_PLAN)
-DEFAULT_VECTOR_INDEX = "workspace.default.project_embeddings_index"
+DEFAULT_VECTOR_INDEX = "projects"
 
+# Global model cache for fast sentence embeddings
+_embedding_model = None
 
 async def execute_sql(statement: str, warehouse_id: str | None = None) -> list[dict]:
     """Execute SQL via EXTERNAL_LINKS disposition and return rows as list of dicts."""
@@ -86,44 +90,46 @@ async def vector_search(
     num_results: int = 5,
     columns: list[str] | None = None,
 ) -> list[dict]:
-    """Query a Databricks Vector Search index by text. Returns list of result dicts."""
-    host = os.getenv("DATABRICKS_HOST")
-    token = os.getenv("DATABRICKS_TOKEN")
-    if not host or not token:
-        raise ValueError("DATABRICKS_HOST and DATABRICKS_TOKEN required for vector search")
+    """Query Actian Vector DB on Vultr by text. Returns list of result dicts."""
+    host = os.getenv("VULTR_IP", "155.138.211.74")
+    if ":" not in host:
+        host = f"{host}:50051"
+    
+    global _embedding_model
+    if _embedding_model is None:
+        _embedding_model = SentenceTransformer('all-mpnet-base-v2')
+        
+    # Generate embeddings locally
+    query_vector = _embedding_model.encode(query_text, normalize_embeddings=True).tolist()
 
-    # Default columns for project_embeddings (REFACTOR_PLAN schema)
-    if columns is None:
-        columns = [
-            "project_id",
-            "project_code",
-            "project_name",
-            "iso3",
-            "country_name",
-            "cluster",
-            "b2b_ratio",
-            "cost_per_beneficiary",
-            "text_blob",
-        ]
+    # Query the Vultr Actian Vector DB
+    async with AsyncCortexClient(host) as client:
+        results = await client.search(
+            index_name,
+            query_vector,
+            top_k=num_results
+        )
+        
+        out_rows = []
+        for r in results:
+            if not getattr(r, "id", None):
+                continue
+            # Async get returns a tuple: (vector, payload)
+            try:
+                vec, payload = await client.get(index_name, r.id)
+            except Exception:
+                payload = {}
+            if payload is None:
+                payload = {}
 
-    url = f"{host.rstrip('/')}/api/2.0/vector-search/indexes/{index_name}/query"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    payload = {
-        "query_text": query_text,
-        "columns": columns,
-        "num_results": num_results,
-    }
-
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(url, headers=headers, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-
-    # Response shape: {"result": {"data_array": [[...], ...], "columns": [...]}}
-    result = data.get("result", {})
-    cols = result.get("columns", columns)
-    rows = result.get("data_array", [])
-    return [dict(zip(cols, row)) for row in rows]
+            if columns:
+                row = {c: payload.get(c) for c in columns}
+            else:
+                row = payload.copy()
+            row["score"] = getattr(r, "score", 0.0)
+            out_rows.append(row)
+            
+    return out_rows
 
 
 async def query_llm(

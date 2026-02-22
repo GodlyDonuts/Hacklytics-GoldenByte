@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from services.databricks_client import execute_sql, vector_search
+from services.databricks_client import vector_search
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -30,36 +30,10 @@ async def benchmark_project(req: BenchmarkRequest):
     num_neighbors = max(1, min(20, req.num_neighbors))
 
     try:
-        # 1. Look up query project
-        # project_id format: {project_code}_{year}
-        # Use parameterized-style: project_code validated as non-empty, escape quotes
-        pc_escaped = _escape_sql_str(project_code)
-        rows = await execute_sql(
-            f"""SELECT project_code, project_name, cluster, requested_funds,
-                target_beneficiaries, b2b_ratio, cost_per_beneficiary, text_blob
-            FROM workspace.default.project_embeddings
-            WHERE project_code = '{pc_escaped}'
-            LIMIT 1"""
-        )
-    except RuntimeError as e:
-        raise HTTPException(502, f"Databricks error: {e}") from e
-
-    if not rows:
-        raise HTTPException(404, f"Project not found: {project_code}")
-
-    query_row = rows[0]
-    query_b2b = _float(query_row.get("b2b_ratio"))
-    text_blob = query_row.get("text_blob") or ""
-
-    if not text_blob:
-        # Fallback: use project name + cluster for search
-        text_blob = f"{query_row.get('project_name', '')} {query_row.get('cluster', '')}"
-
-    try:
-        # 2. Vector search for similar projects (exclude self via filter if supported)
+        # 1. Directly vector search for similar projects based on user input
         neighbors_raw = await vector_search(
-            query_text=text_blob,
-            num_results=num_neighbors + 5,  # overfetch to exclude self
+            query_text=project_code,
+            num_results=num_neighbors + 1,  # get one extra because the first is considered the query target
             columns=[
                 "project_id",
                 "project_code",
@@ -71,15 +45,20 @@ async def benchmark_project(req: BenchmarkRequest):
                 "cost_per_beneficiary",
             ],
         )
-    except (ValueError, RuntimeError) as e:
-        logger.warning("Vector search failed, returning empty neighbors: %s", e)
-        neighbors_raw = []
+    except Exception as e:
+        logger.warning("Vector search failed: %s", e)
+        raise HTTPException(502, f"Vector search error: {e}")
 
-    # Exclude query project from neighbors
+    if not neighbors_raw:
+        raise HTTPException(404, f"No similar projects found for: {project_code}")
+
+    # Set the top result as the query_project
+    query_row = neighbors_raw[0]
+    query_b2b = _float(query_row.get("b2b_ratio"))
+
+    # The rest are neighbors
     neighbors = []
-    for n in neighbors_raw:
-        if n.get("project_code") == project_code:
-            continue
+    for n in neighbors_raw[1:]:
         b2b = _float(n.get("b2b_ratio"))
         delta = (b2b - query_b2b) if (b2b is not None and query_b2b is not None) else None
         neighbors.append({

@@ -17,7 +17,7 @@ import GlobeControls from "./GlobeControls";
 import GenieChartPanel from "./GenieChartPanel";
 import CountryDetailOverlay from "./CountryDetailOverlay";
 import AgentActivityFeed from "./AgentActivityFeed";
-import { useGlobeContext } from "@/context/GlobeContext";
+import { useGlobeContext, type PredictiveRisk } from "@/context/GlobeContext";
 import { getGlobeCrises, GlobeCountry, getPredictiveRisks } from "@/lib/api";
 
 // Color gradient stops per view mode. Each maps a 0-1 range to RGB.
