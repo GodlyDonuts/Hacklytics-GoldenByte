@@ -80,6 +80,11 @@ export default function ActianBenchmark({
 
                 {result && (
                     <div className="space-y-4">
+                        {result.demo_mode && (
+                            <div className="text-[10px] uppercase tracking-wide px-2 py-1 rounded border" style={{ color: 'var(--phase-accent)', borderColor: 'var(--phase-accent)', backgroundColor: 'rgba(45, 212, 168, 0.1)' }}>
+                                Demo results — install Actian cortex client for live vector search
+                            </div>
+                        )}
                         <div className="p-3 border rounded-lg transition-colors duration-[600ms]" style={{ backgroundColor: 'var(--phase-bg-surface)', borderColor: 'var(--phase-border)' }}>
                             <h4 className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--phase-text-muted)' }}>Target Match</h4>
                             <div className="text-sm font-medium" style={{ color: 'var(--phase-text)' }}>

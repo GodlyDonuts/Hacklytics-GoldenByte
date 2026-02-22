@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse
 import httpx
 from markdown_pdf import MarkdownPdf, Section
 
-from services.cache import get_crises
+from ..services.cache import get_crises
 
 router = APIRouter()
 

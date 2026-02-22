@@ -37,6 +37,7 @@ API docs available at `http://localhost:8000/docs`.
 | `WAREHOUSE_ID` | Databricks SQL Warehouse ID |
 | `GEMINI_KEY` | Google Gemini API key (for PDF report generation) |
 | `ELEVENLABS_API_KEY` | ElevenLabs API key (optional, for voice agent) |
+| `VULTR_IP` | (Optional) Actian Vector DB host, e.g. `155.138.211.74` or `host:50051`. Used by `/api/benchmark` and ask/vector search. |
 
 ---
 
@@ -170,3 +171,18 @@ Calls the Databricks Foundation Model serving endpoint (`databricks-meta-llama-3
 | `python-dotenv` | `.env` file loading |
 | `google-genai` | Gemini AI for report generation |
 | `markdown-pdf` | Markdown → PDF conversion |
+| `sentence-transformers` | Embeddings for vector search (benchmark/ask) |
+| `cortex` | **Optional.** Actian Vector DB client for `/api/benchmark` and vector search. Not on PyPI. |
+
+### Optional: Actian Vector DB (Benchmark / Ask)
+
+The **benchmark** and **ask** endpoints use the Actian Vector DB on Vultr. They require:
+
+1. **`sentence-transformers`** — install with: `pip install sentence-transformers`
+2. **`cortex`** — Actian’s beta Python client. It is not on PyPI. You need the **actiancortex** (or actian-vectorAI-db-beta) SDK `.whl` from Actian, then install it locally, for example:
+   ```bash
+   pip install /path/to/actiancortex-*.whl
+   ```
+   If you don’t have the `.whl`, the app still runs; `POST /api/benchmark` and vector-backed ask will return 502 with a message that the cortex package is not installed.
+
+---

@@ -293,6 +293,8 @@ export interface BenchmarkResponse {
   };
   neighbors: BenchmarkNeighbor[];
   insight: string;
+  /** True when Actian Vector DB is unavailable and demo data is returned. */
+  demo_mode?: boolean;
 }
 
 export async function benchmarkProject(

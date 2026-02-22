@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from services.databricks_client import vector_search
+from ..services.databricks_client import vector_search
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -31,7 +31,7 @@ async def benchmark_project(req: BenchmarkRequest):
 
     try:
         # 1. Directly vector search for similar projects based on user input
-        neighbors_raw = await vector_search(
+        out = await vector_search(
             query_text=project_code,
             num_results=num_neighbors + 1,  # get one extra because the first is considered the query target
             columns=[
@@ -44,7 +44,12 @@ async def benchmark_project(req: BenchmarkRequest):
                 "b2b_ratio",
                 "cost_per_beneficiary",
             ],
+            return_demo_flag=True,
         )
+        if isinstance(out, tuple):
+            neighbors_raw, demo_mode = out
+        else:
+            neighbors_raw, demo_mode = out, False
     except Exception as e:
         logger.warning("Vector search failed: %s", e)
         raise HTTPException(502, f"Vector search error: {e}")
@@ -88,6 +93,7 @@ async def benchmark_project(req: BenchmarkRequest):
         },
         "neighbors": neighbors,
         "insight": insight,
+        "demo_mode": demo_mode,
     }
 
 
