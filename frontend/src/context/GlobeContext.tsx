@@ -10,6 +10,18 @@ export interface GenieChartData {
   sql: string | null;
 }
 
+export interface AskResultSource {
+  id?: string;
+  location_code?: string;
+  country_name?: string;
+}
+
+export interface AskResult {
+  question: string;
+  answer: string;
+  sources: AskResultSource[];
+}
+
 export interface PredictiveRisk {
   iso3: string;
   country_name: string;
@@ -43,6 +55,7 @@ export interface GlobeState {
     targetStats: { mismatch: number; peopleInNeed: number; risk: number; severity: number; gap: number; };
   } | null;
   genieChartData: GenieChartData | null;
+  askResult: AskResult | null;
   predictiveRisks: PredictiveRisk[] | null;
 }
 
@@ -56,6 +69,7 @@ type GlobeContextValue = GlobeState & {
   setFlyToCoordinates: React.Dispatch<React.SetStateAction<GlobeState['flyToCoordinates']>>;
   setComparisonData: React.Dispatch<React.SetStateAction<GlobeState['comparisonData']>>;
   setGenieChartData: React.Dispatch<React.SetStateAction<GlobeState['genieChartData']>>;
+  setAskResult: React.Dispatch<React.SetStateAction<GlobeState['askResult']>>;
   setPredictiveRisks: React.Dispatch<React.SetStateAction<GlobeState['predictiveRisks']>>;
 };
 
@@ -76,6 +90,7 @@ const defaultState: GlobeState = {
   flyToCoordinates: null,
   comparisonData: null,
   genieChartData: null,
+  askResult: null,
   predictiveRisks: null,
 };
 
@@ -91,6 +106,7 @@ export function GlobeProvider({ children }: { children: ReactNode }) {
   const [flyToCoordinates, setFlyToCoordinates] = useState<GlobeState['flyToCoordinates']>(defaultState.flyToCoordinates);
   const [comparisonData, setComparisonData] = useState<GlobeState['comparisonData']>(defaultState.comparisonData);
   const [genieChartData, setGenieChartData] = useState<GlobeState['genieChartData']>(defaultState.genieChartData);
+  const [askResult, setAskResult] = useState<GlobeState['askResult']>(defaultState.askResult);
   const [predictiveRisks, setPredictiveRisks] = useState<GlobeState['predictiveRisks']>(defaultState.predictiveRisks);
 
   const value: GlobeContextValue = {
@@ -103,6 +119,7 @@ export function GlobeProvider({ children }: { children: ReactNode }) {
     flyToCoordinates,
     comparisonData,
     genieChartData,
+    askResult,
     predictiveRisks,
     setSelectedCountry,
     setIsSpotlightActive,
@@ -113,6 +130,7 @@ export function GlobeProvider({ children }: { children: ReactNode }) {
     setFlyToCoordinates,
     setComparisonData,
     setGenieChartData,
+    setAskResult,
     setPredictiveRisks,
   };
 

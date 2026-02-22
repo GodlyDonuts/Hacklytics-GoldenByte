@@ -37,7 +37,24 @@ API docs available at `http://localhost:8000/docs`.
 | `WAREHOUSE_ID` | Databricks SQL Warehouse ID |
 | `GEMINI_KEY` | Google Gemini API key (for PDF report generation) |
 | `ELEVENLABS_API_KEY` | ElevenLabs API key (optional, for voice agent) |
-| `VULTR_IP` | (Optional) Actian Vector DB host, e.g. `155.138.211.74` or `host:50051`. Used by `/api/benchmark` and ask/vector search. |
+| `VULTR_IP` | (Optional) Actian Vector DB host (legacy). Used only if Databricks Vector Search is not configured. |
+| `USE_VECTOR_DEMO` | Set to `1`, `true`, or `yes` to always return synthetic vector search results (no Databricks or Actian). |
+
+### Vector Search (Databricks)
+
+When `DATABRICKS_HOST` and `DATABRICKS_TOKEN` are set, `vector_search` uses **Databricks Vector Search** (no Actian/Vultr). You need:
+
+1. **Create a Vector Search index** in your workspace (e.g. in the Vector Search UI or via SDK):
+   - **Index type**: Delta Sync Index (recommended) or Direct Vector Access.
+   - **Full name**: Use the three-level name, e.g. `workspace.default.rag_index` or `main.default.rag_index` (catalog.schema.index_name).
+   - **Source table**: A Delta table with a vector column and any metadata columns you want to return (e.g. `id`, `text`, `location_code`, `country_name`, `severity`, `mismatch_score` for the ask router).
+   - **Embedding endpoint**: Configure an embedding model (e.g. Databricks Foundation Model API) so that `query_text` is embedded server-side. If you skip this, you must use `query_vector` with pre-computed embeddings instead of `query_text`.
+
+2. **Permissions**: Your token must have **SELECT** on the index, **USE SCHEMA** on the schema, and **USE CATALOG** on the catalog.
+
+3. **Routers**: The ask router uses `index_name="workspace.default.rag_index"`. Create an index with that full name (or change the value in `routers/ask.py` to match your index). The benchmark router uses a project embeddings index (see `routers/benchmark.py`).
+
+If the REST path for your workspace differs, see [Databricks Vector Search API — Query index](https://docs.databricks.com/api/workspace/vectorsearchindexes/queryindex).
 
 ---
 
