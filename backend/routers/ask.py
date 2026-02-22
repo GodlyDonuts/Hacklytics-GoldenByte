@@ -1,6 +1,6 @@
 """RAG-based question answering endpoint.
 
-Uses Databricks Vector Search on project_embeddings to find relevant crisis context,
+Uses Databricks Vector Search on the rag_documents index to find relevant crisis context,
 then queries the hosted LLM to generate an answer grounded in data.
 """
 
@@ -28,46 +28,46 @@ class AskResponse(BaseModel):
 async def ask_question(req: AskRequest):
     """Answer a humanitarian funding question using RAG.
 
-    1. Vector search project_embeddings for relevant context
-    2. Optionally query crisis_summary for country-level context
-    3. Build grounded prompt with retrieved documents
-    4. Query LLM for data-informed answer
+    1. Vector search rag_documents index for relevant crisis context
+    2. Build grounded prompt with retrieved documents
+    3. Query LLM for data-informed answer
     """
     try:
-        # Retrieve relevant project/crisis context from project_embeddings
         docs = await vector_search(
             req.question,
+            index_name="workspace.default.rag_index",
             num_results=5,
             columns=[
-                "project_id",
-                "project_code",
-                "project_name",
-                "iso3",
+                "id",
+                "text",
+                "location_code",
                 "country_name",
-                "cluster",
-                "b2b_ratio",
-                "cost_per_beneficiary",
-                "text_blob",
+                "severity",
+                "mismatch_score",
             ],
         )
 
-        # Build context from retrieved documents (project_embeddings schema)
         context_parts = []
         for doc in docs:
-            text = doc.get("text_blob") or doc.get("text") or ""
-            country = doc.get("country_name") or doc.get("location_name") or "Unknown"
-            iso3 = doc.get("iso3") or doc.get("location_code") or ""
-            project = doc.get("project_name") or doc.get("project_code") or ""
-            b2b = doc.get("b2b_ratio")
-            b2b_str = f" (B2B: {b2b})" if b2b is not None else ""
-            context_parts.append(f"[{country} ({iso3})] {project}{b2b_str}: {text}")
+            text = doc.get("text", "")
+            country = doc.get("country_name", "Unknown")
+            iso3 = doc.get("location_code", "")
+            severity = doc.get("severity")
+            mismatch = doc.get("mismatch_score")
+            meta = []
+            if severity is not None:
+                meta.append(f"severity: {severity}")
+            if mismatch is not None:
+                meta.append(f"mismatch: {mismatch}")
+            meta_str = f" ({', '.join(meta)})" if meta else ""
+            context_parts.append(f"[{country} ({iso3})]{meta_str}: {text}")
 
         context_block = "\n\n".join(context_parts)
         augmented_prompt = (
             f"Context from humanitarian crisis and project data:\n{context_block}\n\n"
             f"Question: {req.question}\n\n"
-            "Answer based on the context above. Cite specific countries, projects, and numbers. "
-            "When discussing B2B ratios, explain that higher = more beneficiaries per dollar = better efficiency."
+            "Answer based on the context above. Cite specific countries and numbers. "
+            "When discussing severity and mismatch scores, explain their implications for funding gaps."
         )
 
         answer = await query_llm(augmented_prompt)
@@ -76,8 +76,8 @@ async def ask_question(req: AskRequest):
             answer=answer,
             sources=[
                 {
-                    "project_code": d.get("project_code", ""),
-                    "iso3": d.get("iso3", ""),
+                    "id": d.get("id", ""),
+                    "location_code": d.get("location_code", ""),
                     "country_name": d.get("country_name", ""),
                 }
                 for d in docs

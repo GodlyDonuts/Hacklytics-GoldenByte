@@ -128,7 +128,7 @@ async def vector_search(
 
 async def query_llm(
     prompt: str,
-    model: str = "databricks-meta-llama-3-1-70b-instruct",
+    model: str = "databricks-meta-llama-3-3-70b-instruct",
 ) -> str:
     """Call a Databricks Foundation Model serving endpoint."""
     host = os.getenv("DATABRICKS_HOST")
