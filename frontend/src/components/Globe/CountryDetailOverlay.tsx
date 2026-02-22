@@ -87,10 +87,12 @@ function CrisisCard({ crisis, index }: { crisis: Crisis; index: number }) {
       <div className="grid grid-cols-2 gap-x-4 gap-y-2">
         <Metric label="People in Need" value={formatCompact(crisis.people_in_need)} />
         <Metric label="Target Beneficiaries" value={formatCompact(crisis.target_beneficiaries)} />
-        <Metric label="Funding Gap" value={`$${formatCompact(crisis.funding_gap_usd)}`} />
-        <Metric label="Coverage" value={`${crisis.funding_coverage_pct?.toFixed(1) ?? "--"}%`} />
+        <Metric label="Funding Planned" value={`$${formatCompact(crisis.requirements_usd)}`} />
+        <Metric label="Funding Received" value={`$${formatCompact(crisis.funding_usd)}`} />
+        <Metric label="Severity Score" value={crisis.acaps_severity?.toFixed(1) ?? "--"} />
         <Metric label="B2B Ratio" value={crisis.b2b_ratio != null ? crisis.b2b_ratio.toFixed(3) : "--"} />
-        <Metric label="Oversight" value={crisis.oversight_score != null ? crisis.oversight_score.toFixed(2) : "--"} />
+        <Metric label="Oversight Score" value={crisis.oversight_score != null ? crisis.oversight_score.toFixed(2) : "--"} />
+        <Metric label="Coverage" value={`${crisis.funding_coverage_pct?.toFixed(1) ?? "--"}%`} />
       </div>
       {crisis.funding_coverage_pct != null && <CoverageBar pct={crisis.funding_coverage_pct} />}
     </div>
@@ -315,13 +317,31 @@ export default function CountryDetailOverlay({ countries }: CountryDetailOverlay
     }
   }, []);
 
+  // Compute overlooked ranking: sort all countries by avg oversight_score descending.
+  // Must be above the early return to satisfy React's Rules of Hooks.
+  const overlookedRank = useMemo(() => {
+    if (!selectedCountry || countries.length === 0) return null;
+    const scored = countries
+      .filter((c) => (c.crises ?? []).length > 0)
+      .map((c) => {
+        const avg =
+          c.crises.reduce((sum, cr) => sum + (cr.oversight_score ?? 0), 0) /
+          c.crises.length;
+        return { iso3: c.iso3, avg };
+      })
+      .sort((a, b) => b.avg - a.avg);
+    const idx = scored.findIndex((s) => s.iso3 === selectedCountry);
+    if (idx === -1) return null;
+    return { rank: idx + 1, total: scored.length };
+  }, [selectedCountry, countries]);
+
   if (!country) return null;
 
   const crises = country.crises ?? [];
-  // people_in_need and funding_gap_usd are country-level metrics duplicated
+  // people_in_need and funding_usd are country-level metrics duplicated
   // across every crisis row; use max to de-duplicate instead of summing
   const totalPeopleInNeed = Math.max(0, ...crises.map((c) => c.people_in_need ?? 0));
-  const totalGap = Math.max(0, ...crises.map((c) => c.funding_gap_usd ?? 0));
+  const totalFunding = Math.max(0, ...crises.map((c) => c.funding_usd ?? 0));
   const outlierProjects = projects.filter((p) => p.is_outlier);
 
   return (
@@ -351,13 +371,21 @@ export default function CountryDetailOverlay({ countries }: CountryDetailOverlay
           <p className="text-base text-white/90 font-semibold">{formatCompact(totalPeopleInNeed)}</p>
         </div>
         <div>
-          <p className="text-xs text-white/40 uppercase">Funding Gap</p>
-          <p className="text-base text-white/90 font-semibold">${formatCompact(totalGap)}</p>
+          <p className="text-xs text-white/40 uppercase">Total Funding</p>
+          <p className="text-base text-white/90 font-semibold">${formatCompact(totalFunding)}</p>
         </div>
         <div>
           <p className="text-xs text-white/40 uppercase">Crises</p>
           <p className="text-base text-white/90 font-semibold">{crises.length}</p>
         </div>
+        {overlookedRank && (
+          <div>
+            <p className="text-xs text-white/40 uppercase">Overlooked Rank</p>
+            <p className="text-base text-white/90 font-semibold">
+              #{overlookedRank.rank} <span className="text-sm text-white/40">of {overlookedRank.total}</span>
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Scrollable body */}

@@ -18,7 +18,7 @@ import GenieChartPanel from "./GenieChartPanel";
 import CountryDetailOverlay from "./CountryDetailOverlay";
 import AgentActivityFeed from "./AgentActivityFeed";
 import { useGlobeContext, type PredictiveRisk } from "@/context/GlobeContext";
-import { getGlobeCrises, GlobeCountry, getPredictiveRisks } from "@/lib/api";
+import { getGlobeCrises, GlobeCountry, getPredictiveRisks, type Crisis } from "@/lib/api";
 
 // Color gradient stops per view mode. Each maps a 0-1 range to RGB.
 const SEVERITY_STOPS: [number, number, number, number][] = [
@@ -51,6 +51,11 @@ const COLOR_STOPS: Record<string, ColorStops> = {
   anomalies: OVERSIGHT_STOPS,
 };
 
+const MONTH_NAMES = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
 const NEUTRAL_CAP = "rgba(255, 255, 255, 0.03)";
 const NEUTRAL_SIDE = "rgba(255, 255, 255, 0.02)";
 const DIMMED_CAP = "rgba(255, 255, 255, 0.06)";
@@ -58,6 +63,14 @@ const DIMMED_SIDE = "rgba(255, 255, 255, 0.03)";
 
 const GEOJSON_URL =
   "https://raw.githubusercontent.com/vasturiano/globe.gl/master/example/datasets/ne_110m_admin_0_countries.geojson";
+
+function formatCompact(v: number | null | undefined): string {
+  if (v === null || v === undefined) return "--";
+  if (Math.abs(v) >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(1)}B`;
+  if (Math.abs(v) >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(v) >= 1_000) return `${(v / 1_000).toFixed(1)}K`;
+  return Number.isInteger(v) ? String(v) : v.toFixed(1);
+}
 
 function severityToT(severity: number): number {
   return Math.min(1, Math.max(0, (severity - 1) / 4));
@@ -116,7 +129,7 @@ export default function GlobeView() {
   const [geoReady, setGeoReady] = useState(false);
   const [hoveredIso, setHoveredIso] = useState<string | null>(null);
 
-  const { selectedCountry, setSelectedCountry, flyToCoordinates, comparisonData, viewMode, filters, predictiveRisks, setPredictiveRisks } =
+  const { selectedCountry, setSelectedCountry, flyToCoordinates, comparisonData, viewMode, filters, setFilters, predictiveRisks, setPredictiveRisks } =
     useGlobeContext();
 
   const [loadingRisks, setLoadingRisks] = useState(false);
@@ -415,10 +428,51 @@ export default function GlobeView() {
           return el;
         });
     } else {
-      globe.htmlElementsData([]);
+      // Crisis dots at country centroids for non-predictive modes
+      const crisisDots = data.reduce((acc, country) => {
+        const crises = country.crises ?? [];
+        if (crises.length === 0 || !country.lat || !country.lng) return acc;
+        acc.push({
+          lat: country.lat,
+          lng: country.lng,
+          crises,
+          countryName: country.country_name,
+        });
+        return acc;
+      }, [] as { lat: number; lng: number; crises: Crisis[]; countryName: string }[]);
+
+      globe
+        .htmlElementsData(crisisDots)
+        .htmlElement((d: any) => {
+          const el = document.createElement("div");
+          const crises = d.crises as Crisis[];
+          const dotSize = 6;
+          const gap = 2;
+          const cols = Math.min(crises.length, 4);
+          const totalW = cols * dotSize + (cols - 1) * gap;
+          const severityColor = (sev: string) => {
+            switch (sev) {
+              case "Very High": return "#ef4444";
+              case "High": return "#f97316";
+              case "Medium": return "#eab308";
+              case "Low": return "#22c55e";
+              case "Very Low": return "#10b981";
+              default: return "#6b7280";
+            }
+          };
+          const dots = crises.slice(0, 8).map((c) =>
+            `<div style="width:${dotSize}px;height:${dotSize}px;border-radius:50%;background:${severityColor(c.severity_class)};box-shadow:0 0 4px ${severityColor(c.severity_class)};"></div>`
+          ).join("");
+          el.innerHTML = `
+            <div style="transform:translate(-50%,-50%);display:flex;flex-wrap:wrap;gap:${gap}px;max-width:${totalW + gap}px;justify-content:center;pointer-events:none;">
+              ${dots}
+            </div>
+          `;
+          return el;
+        });
     }
 
-  }, [polygonFeatures, comparisonData, viewMode, spotlightIso, hoveredIso, selectedCountry, countryMetrics, setSelectedCountry, predictiveRisks]);
+  }, [polygonFeatures, comparisonData, viewMode, spotlightIso, hoveredIso, selectedCountry, countryMetrics, setSelectedCountry, predictiveRisks, data]);
 
   // Camera: fly to coordinates from context
   useEffect(() => {
@@ -439,37 +493,99 @@ export default function GlobeView() {
     if (!hoveredIso) return null;
     const feat = polygonFeatures.find((f) => f.properties.ISO_A3 === hoveredIso);
     if (!feat || !feat.__hasCrisis) return null;
-    const metrics = countryMetrics.get(hoveredIso);
     const country = data.find((c) => c.iso3 === hoveredIso);
-    const crisisCount = country?.crises?.length ?? 0;
+    const crises = country?.crises ?? [];
+    const crisisCount = crises.length;
+    // Use Math.max to de-duplicate country-level metrics across crisis rows
+    const totalFunding = Math.max(0, ...crises.map((c) => c.funding_usd ?? 0));
+    const totalPeopleInNeed = Math.max(0, ...crises.map((c) => c.people_in_need ?? 0));
     return {
       name: (feat.properties.NAME as string) ?? hoveredIso,
       iso: hoveredIso,
-      severity: metrics?.severity ?? 1,
-      oversightScore: metrics?.oversightScore ?? 0,
-      fundingGap: metrics?.fundingGap ?? 0,
       crisisCount,
+      totalFunding,
+      totalPeopleInNeed,
     };
-  }, [hoveredIso, polygonFeatures, countryMetrics, data]);
+  }, [hoveredIso, polygonFeatures, data]);
 
   return (
     <div className="relative w-full h-screen">
       <div ref={containerRef} className="w-full h-full" />
+
+      {/* Year/Month indicator -- top left */}
+      <div className="absolute top-4 left-4 z-20 rounded-lg border border-[#00d4ff]/20 bg-[#0d1117]/80 backdrop-blur-sm px-4 py-2.5 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => setFilters((f) => ({ ...f, year: Math.max(2022, f.year - 1), month: null }))}
+          className="text-white/40 hover:text-white/80 text-sm font-mono transition-colors"
+          aria-label="Previous year"
+        >
+          &lt;
+        </button>
+        <div className="text-center min-w-[100px]">
+          <p className="text-lg font-semibold text-white/90 font-mono leading-tight">
+            {filters.month != null ? `${MONTH_NAMES[filters.month - 1]} ${filters.year}` : String(filters.year)}
+          </p>
+          <p className="text-[10px] text-white/30 uppercase tracking-widest">
+            {filters.month != null ? "Monthly View" : "Full Year"}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setFilters((f) => ({ ...f, year: Math.min(2026, f.year + 1), month: null }))}
+          className="text-white/40 hover:text-white/80 text-sm font-mono transition-colors"
+          aria-label="Next year"
+        >
+          &gt;
+        </button>
+        <div className="w-px h-6 bg-white/10" />
+        <button
+          type="button"
+          onClick={() =>
+            setFilters((f) => {
+              if (f.month === null) return { ...f, month: 1 };
+              if (f.month <= 1) return { ...f, month: null };
+              return { ...f, month: f.month - 1 };
+            })
+          }
+          className="text-white/40 hover:text-white/80 text-xs font-mono transition-colors"
+          aria-label="Previous month"
+        >
+          M-
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            setFilters((f) => {
+              if (f.month === null) return { ...f, month: 1 };
+              if (f.month >= 12) return { ...f, month: null };
+              return { ...f, month: f.month + 1 };
+            })
+          }
+          className="text-white/40 hover:text-white/80 text-xs font-mono transition-colors"
+          aria-label="Next month"
+        >
+          M+
+        </button>
+      </div>
+
       {/* Hovered country tooltip -- bottom right corner */}
       {hoveredInfo && (
         <div className="absolute bottom-4 right-4 rounded-lg border border-[#00d4ff]/30 bg-[#1a1d21]/90 px-5 py-4 text-base text-white/90 backdrop-blur-sm">
           <div className="font-semibold text-[#00e5ff] text-lg">{hoveredInfo.name} ({hoveredInfo.iso})</div>
-          <div className="text-sm text-white/60 mt-1.5 space-y-0.5">
-            <div>Severity: {hoveredInfo.severity.toFixed(1)}</div>
-            {viewMode === "anomalies" && (
-              <div>Oversight: {(hoveredInfo.oversightScore * 100).toFixed(0)}%</div>
-            )}
-            {hoveredInfo.crisisCount > 1 && (
-              <div>{hoveredInfo.crisisCount} active crises</div>
-            )}
-            {viewMode === "funding-gap" && (
-              <div>Funding Gap: {(hoveredInfo.fundingGap * 100).toFixed(0)}%</div>
-            )}
+          <div className="text-sm text-white/60 mt-2 space-y-1">
+            <div className="flex justify-between gap-6">
+              <span className="text-white/40">Crises</span>
+              <span className="font-mono text-white/80">{hoveredInfo.crisisCount}</span>
+            </div>
+            <div className="flex justify-between gap-6">
+              <span className="text-white/40">Total Funding</span>
+              <span className="font-mono text-white/80">${formatCompact(hoveredInfo.totalFunding)}</span>
+            </div>
+            <div className="flex justify-between gap-6">
+              <span className="text-white/40">People in Need</span>
+              <span className="font-mono text-white/80">{formatCompact(hoveredInfo.totalPeopleInNeed)}</span>
+            </div>
           </div>
         </div>
       )}

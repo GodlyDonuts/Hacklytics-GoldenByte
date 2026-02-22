@@ -68,6 +68,7 @@ async def get_globe_crises(
             "people_in_need": _int(r.get("people_in_need")),
             "target_beneficiaries": _int(r.get("target_beneficiaries")),
             "funding_usd": _float(r.get("funding_usd")),
+            "requirements_usd": _float(r.get("requirements_usd")),
             "funding_gap_usd": _float(r.get("funding_gap_usd")),
             "funding_coverage_pct": _pct(r.get("funding_coverage_pct")),
             "coverage_ratio": _float(r.get("coverage_ratio")),

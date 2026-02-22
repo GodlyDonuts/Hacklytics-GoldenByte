@@ -5,3 +5,6 @@ pandas==2.2.0
 python-dotenv==1.0.1
 google-genai==1.38.0
 markdown-pdf==1.13.1
+# Optional: needed for vector_search (Actian Vector DB)
+# sentence-transformers>=3.0.0
+# cortex (from actian-vectorAI-db-beta submodule)

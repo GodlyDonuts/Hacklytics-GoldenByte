@@ -119,6 +119,8 @@ export interface Crisis {
   funding_state: string;
   people_in_need: number;
   target_beneficiaries: number;
+  funding_usd: number;
+  requirements_usd: number;
   funding_gap_usd: number;
   funding_coverage_pct: number;
   coverage_ratio: number;

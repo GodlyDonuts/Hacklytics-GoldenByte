@@ -2,8 +2,15 @@
 import json
 import os
 import httpx
-from sentence_transformers import SentenceTransformer
-from cortex import AsyncCortexClient
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    SentenceTransformer = None
+
+try:
+    from cortex import AsyncCortexClient
+except ImportError:
+    AsyncCortexClient = None
 
 # Default vector search index (from REFACTOR_PLAN)
 DEFAULT_VECTOR_INDEX = "projects"
@@ -91,6 +98,10 @@ async def vector_search(
     columns: list[str] | None = None,
 ) -> list[dict]:
     """Query Actian Vector DB on Vultr by text. Returns list of result dicts."""
+    if AsyncCortexClient is None:
+        raise RuntimeError("cortex package is not installed. Install the actian-vectorAI-db-beta submodule.")
+    if SentenceTransformer is None:
+        raise RuntimeError("sentence-transformers package is not installed.")
     host = os.getenv("VULTR_IP", "155.138.211.74")
     if ":" not in host:
         host = f"{host}:50051"
