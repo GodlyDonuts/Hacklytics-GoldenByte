@@ -53,8 +53,8 @@ function CoverageBar({ pct }: { pct: number }) {
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-[10px] text-white/40 uppercase tracking-wider">{label}</p>
-      <p className="text-sm text-white/80 font-mono">{value}</p>
+      <p className="text-xs text-white/40 uppercase tracking-wider">{label}</p>
+      <p className="text-base text-white/80 font-mono">{value}</p>
     </div>
   );
 }
@@ -67,21 +67,21 @@ function CrisisCard({ crisis, index }: { crisis: Crisis; index: number }) {
     <div className={`rounded-lg border ${sev.border} bg-white/[0.03] p-4 space-y-3`}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-white/90 leading-snug">
+          <p className="text-base font-medium text-white/90 leading-snug">
             {crisis.crisis_name || `Crisis ${index + 1}`}
           </p>
           <div className="flex items-center gap-2 mt-1">
-            <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${sev.bg} ${sev.text}`}>
+            <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${sev.bg} ${sev.text}`}>
               {crisis.severity_class}
             </span>
-            <span className="text-[10px] text-white/40">
+            <span className="text-xs text-white/40">
               Severity {crisis.acaps_severity?.toFixed(1) ?? "--"}
             </span>
-            {crisis.has_hrp && <span className="text-[10px] text-cyan-400/70">HRP</span>}
+            {crisis.has_hrp && <span className="text-xs text-cyan-400/70">HRP</span>}
           </div>
         </div>
         {crisis.crisis_rank != null && crisis.crisis_rank > 0 && (
-          <span className="shrink-0 text-xs text-white/30 font-mono">#{crisis.crisis_rank}</span>
+          <span className="shrink-0 text-sm text-white/30 font-mono">#{crisis.crisis_rank}</span>
         )}
       </div>
       <div className="grid grid-cols-2 gap-x-4 gap-y-2">
@@ -117,15 +117,15 @@ function ProjectCard({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-medium text-white/80 leading-snug truncate">
+          <p className="text-sm font-medium text-white/80 leading-snug truncate">
             {project.project_name ?? project.project_code ?? "Unknown"}
           </p>
-          <p className="text-[10px] text-white/40 mt-0.5">
+          <p className="text-xs text-white/40 mt-0.5">
             {project.cluster ?? "No cluster"} | {project.project_code}
           </p>
         </div>
         {isOutlier && (
-          <span className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-400 uppercase">
+          <span className="shrink-0 px-2 py-0.5 rounded text-[11px] font-bold bg-amber-500/20 text-amber-400 uppercase">
             Outlier
           </span>
         )}
@@ -133,20 +133,20 @@ function ProjectCard({
 
       <div className="grid grid-cols-3 gap-2">
         <div>
-          <p className="text-[9px] text-white/30 uppercase">B2B</p>
-          <p className={`text-xs font-mono ${isOutlier ? "text-amber-400" : "text-white/70"}`}>
+          <p className="text-[11px] text-white/30 uppercase">B2B</p>
+          <p className={`text-sm font-mono ${isOutlier ? "text-amber-400" : "text-white/70"}`}>
             {project.b2b_ratio?.toFixed(3) ?? "--"}
           </p>
         </div>
         <div>
-          <p className="text-[9px] text-white/30 uppercase">Cluster Median</p>
-          <p className="text-xs font-mono text-white/50">
+          <p className="text-[11px] text-white/30 uppercase">Cluster Median</p>
+          <p className="text-sm font-mono text-white/50">
             {project.cluster_median_b2b?.toFixed(3) ?? "--"}
           </p>
         </div>
         <div>
-          <p className="text-[9px] text-white/30 uppercase">Budget</p>
-          <p className="text-xs font-mono text-white/70">
+          <p className="text-[11px] text-white/30 uppercase">Budget</p>
+          <p className="text-sm font-mono text-white/70">
             ${formatCompact(project.requested_funds)}
           </p>
         </div>
@@ -163,7 +163,7 @@ function ProjectCard({
               style={{ width: `${Math.min(100, project.b2b_percentile * 100)}%` }}
             />
           </div>
-          <span className="text-[9px] text-white/30 font-mono w-8 text-right">
+          <span className="text-[11px] text-white/30 font-mono w-8 text-right">
             P{(project.b2b_percentile * 100).toFixed(0)}
           </span>
         </div>
@@ -173,7 +173,7 @@ function ProjectCard({
         <button
           type="button"
           onClick={() => onBenchmark(project.project_code!)}
-          className="w-full mt-1 px-2 py-1.5 rounded-md text-[10px] font-medium text-[#00d4ff]/80 bg-[#00d4ff]/10 hover:bg-[#00d4ff]/20 transition-colors"
+          className="w-full mt-1 px-2 py-1.5 rounded-md text-xs font-medium text-[#00d4ff]/80 bg-[#00d4ff]/10 hover:bg-[#00d4ff]/20 transition-colors"
         >
           Find comparable projects
         </button>
@@ -196,39 +196,39 @@ function BenchmarkResults({
   return (
     <div className="rounded-lg border border-[#00d4ff]/20 bg-[#00d4ff]/[0.04] p-4 space-y-3">
       <div className="flex items-start justify-between gap-2">
-        <p className="text-xs font-medium text-[#00d4ff]">Benchmark Comparison</p>
+        <p className="text-sm font-medium text-[#00d4ff]">Benchmark Comparison</p>
         <button
           type="button"
           onClick={onClose}
-          className="text-[10px] text-white/40 hover:text-white/70"
+          className="text-xs text-white/40 hover:text-white/70"
         >
           close
         </button>
       </div>
-      <p className="text-xs text-white/60 leading-relaxed">{insight}</p>
+      <p className="text-sm text-white/60 leading-relaxed">{insight}</p>
       {neighbors.length > 0 && (
         <div className="space-y-2">
-          <p className="text-[10px] text-white/40 uppercase">Comparable Projects</p>
+          <p className="text-xs text-white/40 uppercase">Comparable Projects</p>
           {neighbors.map((n, i) => (
             <div
               key={n.project_code ?? i}
-              className="flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-white/[0.03] border border-white/5"
+              className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-md bg-white/[0.03] border border-white/5"
             >
               <div className="min-w-0 flex-1">
-                <p className="text-[11px] text-white/70 truncate">
+                <p className="text-sm text-white/70 truncate">
                   {n.project_name ?? n.project_code}
                 </p>
-                <p className="text-[9px] text-white/30">
+                <p className="text-[11px] text-white/30">
                   {n.country_name ?? n.iso3} | {n.cluster}
                 </p>
               </div>
               <div className="text-right shrink-0">
-                <p className="text-[11px] font-mono text-white/70">
+                <p className="text-sm font-mono text-white/70">
                   B2B {n.b2b_ratio?.toFixed(3) ?? "--"}
                 </p>
                 {n.b2b_delta != null && (
                   <p
-                    className={`text-[9px] font-mono ${
+                    className={`text-[11px] font-mono ${
                       n.b2b_delta > 0 ? "text-emerald-400" : "text-red-400"
                     }`}
                   >
@@ -327,8 +327,8 @@ export default function CountryDetailOverlay({ countries }: CountryDetailOverlay
       {/* Header */}
       <div className="flex items-start justify-between gap-3 px-5 pt-4 pb-3 border-b border-white/10">
         <div>
-          <p className="text-lg font-semibold text-white">{country.country_name}</p>
-          <p className="text-xs text-white/40 mt-0.5">
+          <p className="text-xl font-semibold text-white">{country.country_name}</p>
+          <p className="text-sm text-white/40 mt-0.5">
             {country.iso3} -- {crises.length} crisis{crises.length !== 1 ? "es" : ""}
           </p>
         </div>
@@ -343,18 +343,18 @@ export default function CountryDetailOverlay({ countries }: CountryDetailOverlay
       </div>
 
       {/* Summary bar */}
-      <div className="px-5 py-3 border-b border-white/5 flex gap-6">
+      <div className="px-5 py-3.5 border-b border-white/5 flex gap-6">
         <div>
-          <p className="text-[10px] text-white/40 uppercase">People in Need</p>
-          <p className="text-sm text-white/90 font-semibold">{formatCompact(totalPeopleInNeed)}</p>
+          <p className="text-xs text-white/40 uppercase">People in Need</p>
+          <p className="text-base text-white/90 font-semibold">{formatCompact(totalPeopleInNeed)}</p>
         </div>
         <div>
-          <p className="text-[10px] text-white/40 uppercase">Funding Gap</p>
-          <p className="text-sm text-white/90 font-semibold">${formatCompact(totalGap)}</p>
+          <p className="text-xs text-white/40 uppercase">Funding Gap</p>
+          <p className="text-base text-white/90 font-semibold">${formatCompact(totalGap)}</p>
         </div>
         <div>
-          <p className="text-[10px] text-white/40 uppercase">Crises</p>
-          <p className="text-sm text-white/90 font-semibold">{crises.length}</p>
+          <p className="text-xs text-white/40 uppercase">Crises</p>
+          <p className="text-base text-white/90 font-semibold">{crises.length}</p>
         </div>
       </div>
 
@@ -362,7 +362,7 @@ export default function CountryDetailOverlay({ countries }: CountryDetailOverlay
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 custom-scrollbar">
         {/* Section: Crises */}
         <div className="space-y-3">
-          <p className="text-xs font-medium text-white/50 uppercase tracking-wider">
+          <p className="text-sm font-medium text-white/50 uppercase tracking-wider">
             Crisis Details
           </p>
           {crises.length > 0 ? (
@@ -379,12 +379,12 @@ export default function CountryDetailOverlay({ countries }: CountryDetailOverlay
           <button
             type="button"
             onClick={() => setShowProjects(!showProjects)}
-            className="w-full flex items-center justify-between text-xs font-medium text-white/50 uppercase tracking-wider hover:text-white/70 transition-colors"
+            className="w-full flex items-center justify-between text-sm font-medium text-white/50 uppercase tracking-wider hover:text-white/70 transition-colors"
           >
             <span>
               Project-Level B2B Analysis
               {b2bSummary && (
-                <span className="ml-2 text-[10px] normal-case text-amber-400">
+                <span className="ml-2 text-xs normal-case text-amber-400">
                   {b2bSummary.outlier_count} outlier{b2bSummary.outlier_count !== 1 ? "s" : ""}
                 </span>
               )}
@@ -401,20 +401,20 @@ export default function CountryDetailOverlay({ countries }: CountryDetailOverlay
               {!b2bLoading && b2bSummary && (
                 <div className="grid grid-cols-3 gap-3 px-1">
                   <div>
-                    <p className="text-[9px] text-white/30 uppercase">Weighted B2B</p>
-                    <p className="text-xs font-mono text-white/70">
+                    <p className="text-[11px] text-white/30 uppercase">Weighted B2B</p>
+                    <p className="text-sm font-mono text-white/70">
                       {b2bSummary.weighted_b2b?.toFixed(3) ?? "--"}
                     </p>
                   </div>
                   <div>
-                    <p className="text-[9px] text-white/30 uppercase">Median B2B</p>
-                    <p className="text-xs font-mono text-white/70">
+                    <p className="text-[11px] text-white/30 uppercase">Median B2B</p>
+                    <p className="text-sm font-mono text-white/70">
                       {b2bSummary.median_b2b?.toFixed(3) ?? "--"}
                     </p>
                   </div>
                   <div>
-                    <p className="text-[9px] text-white/30 uppercase">Projects</p>
-                    <p className="text-xs font-mono text-white/70">{b2bSummary.total_projects}</p>
+                    <p className="text-[11px] text-white/30 uppercase">Projects</p>
+                    <p className="text-sm font-mono text-white/70">{b2bSummary.total_projects}</p>
                   </div>
                 </div>
               )}
@@ -422,7 +422,7 @@ export default function CountryDetailOverlay({ countries }: CountryDetailOverlay
               {/* Outliers first */}
               {outlierProjects.length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-[10px] text-amber-400/70 uppercase">
+                  <p className="text-xs text-amber-400/70 uppercase">
                     Flagged Projects ({outlierProjects.length})
                   </p>
                   {outlierProjects.map((p, i) => (
@@ -438,7 +438,7 @@ export default function CountryDetailOverlay({ countries }: CountryDetailOverlay
               {/* Normal projects */}
               {projects.filter((p) => !p.is_outlier).length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-[10px] text-white/30 uppercase">
+                  <p className="text-xs text-white/30 uppercase">
                     Other Projects ({projects.filter((p) => !p.is_outlier).length})
                   </p>
                   {projects
@@ -452,7 +452,7 @@ export default function CountryDetailOverlay({ countries }: CountryDetailOverlay
                       />
                     ))}
                   {projects.filter((p) => !p.is_outlier).length > 10 && (
-                    <p className="text-[10px] text-white/30 text-center">
+                    <p className="text-xs text-white/30 text-center">
                       +{projects.filter((p) => !p.is_outlier).length - 10} more
                     </p>
                   )}

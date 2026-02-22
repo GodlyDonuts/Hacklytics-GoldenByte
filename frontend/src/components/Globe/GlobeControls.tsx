@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, type RefObject } from "react";
+import { useState, useCallback, type RefObject } from "react";
 import type { GlobeInstance } from "globe.gl";
 import { useGlobeContext } from "@/context/GlobeContext";
 
@@ -52,14 +52,15 @@ export default function GlobeControls({ globeRef }: GlobeControlsProps) {
   return (
     <>
       {/* View mode selector -- top center */}
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex gap-1 rounded-xl bg-[#0d1117]/80 backdrop-blur-md border border-white/10 p-1">
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex gap-1.5 rounded-xl bg-[#0d1117]/80 backdrop-blur-md border border-white/10 p-1.5">
         {VIEW_MODES.map((m) => (
           <button
             key={m.key}
             type="button"
             onClick={() => setViewMode(m.key)}
             title={m.desc}
-            className={`px-4 py-2 rounded-lg text-xs font-medium transition-all ${viewMode === m.key
+            className={`px-5 py-2.5 rounded-lg text-sm font-medium transition-all ${
+              viewMode === m.key
                 ? "bg-[#00d4ff]/20 text-[#00d4ff] shadow-sm"
                 : "text-white/50 hover:text-white/80 hover:bg-white/5"
               }`}
@@ -70,11 +71,11 @@ export default function GlobeControls({ globeRef }: GlobeControlsProps) {
       </div>
 
       {/* Zoom + spin controls -- bottom left */}
-      <div className="absolute bottom-4 left-4 flex gap-2 rounded-lg bg-black/50 p-2">
+      <div className="absolute bottom-4 left-4 flex gap-2 rounded-lg bg-black/50 p-2.5">
         <button
           type="button"
           onClick={handleZoomIn}
-          className="rounded px-3 py-1.5 text-sm text-white hover:bg-white/10"
+          className="rounded px-3.5 py-2 text-base text-white hover:bg-white/10"
           aria-label="Zoom in"
         >
           +
@@ -82,7 +83,7 @@ export default function GlobeControls({ globeRef }: GlobeControlsProps) {
         <button
           type="button"
           onClick={handleZoomOut}
-          className="rounded px-3 py-1.5 text-sm text-white hover:bg-white/10"
+          className="rounded px-3.5 py-2 text-base text-white hover:bg-white/10"
           aria-label="Zoom out"
         >
           -
@@ -90,7 +91,7 @@ export default function GlobeControls({ globeRef }: GlobeControlsProps) {
         <button
           type="button"
           onClick={handleAutoSpin}
-          className={`rounded px-3 py-1.5 text-sm ${autoRotate ? "bg-blue-600 text-white" : "text-white hover:bg-white/10"}`}
+          className={`rounded px-3.5 py-2 text-base ${autoRotate ? "bg-blue-600 text-white" : "text-white hover:bg-white/10"}`}
           aria-label="Auto spin"
         >
           Spin

@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useCallback, useEffect, use
 import { useConversation } from '@elevenlabs/react';
 import { useGlobeContext } from '@/context/GlobeContext';
 import { generateReport } from '@/lib/api';
+import { pushActivity, resolveActivity } from '@/components/Globe/AgentActivityFeed';
 
 const AGENT_ID = process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID || 'agent_1201khzd23t9fsaramppkhnftan0';
 
@@ -53,7 +54,7 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
     micMuted: !isSpacePressed,
     clientTools: {
       show_location_on_globe: (parameters: { lat: number; lng: number; iso3?: string }) => {
-        console.log('AI called show_location_on_globe:', parameters);
+        const aid = pushActivity('show_location_on_globe', 'Flying to location', parameters.iso3 ?? `${parameters.lat.toFixed(1)}, ${parameters.lng.toFixed(1)}`);
         setFlyToCoordinates({
           lat: parameters.lat,
           lng: parameters.lng,
@@ -64,11 +65,14 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
           setSelectedCountry(parameters.iso3);
         }
         setIsSpotlightActive(true);
+        resolveActivity(aid, 'done', parameters.iso3 ? `Focused on ${parameters.iso3}` : undefined);
         return 'Successfully moved the globe.';
       },
       change_view_mode: (parameters: { mode: 'severity' | 'funding-gap' | 'anomalies' }) => {
-        console.log('AI called change_view_mode:', parameters);
+        const modeLabels: Record<string, string> = { severity: 'Severity', 'funding-gap': 'Funding Gap', anomalies: 'Overlooked' };
+        const aid = pushActivity('change_view_mode', 'Switching view mode', modeLabels[parameters.mode] ?? parameters.mode);
         setViewMode(parameters.mode);
+        resolveActivity(aid, 'done');
         return `Successfully changed the view mode to ${parameters.mode}.`;
       },
       compare_countries: (parameters: {
@@ -81,7 +85,7 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
         sourceStats: { mismatch: number; peopleInNeed: number; risk: number; severity: number; gap: number };
         targetStats: { mismatch: number; peopleInNeed: number; risk: number; severity: number; gap: number };
       }) => {
-        console.log('AI called compare_countries:', parameters);
+        const aid = pushActivity('compare_countries', 'Comparing countries', `${parameters.sourceIso} vs ${parameters.targetIso}`);
         setFlyToCoordinates({
           lat: parameters.sourceLat,
           lng: parameters.sourceLng,
@@ -97,10 +101,11 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
           sourceStats: parameters.sourceStats,
           targetStats: parameters.targetStats,
         });
+        resolveActivity(aid, 'done');
         return 'Successfully compared the countries. The user can now see the visualization.';
       },
       query_data: async (parameters: { question: string }) => {
-        console.log('AI called query_data:', parameters);
+        const aid = pushActivity('query_data', 'Querying Databricks', parameters.question);
         try {
           const resp = await fetch(
             `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/genie`,
@@ -110,7 +115,10 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
               body: JSON.stringify({ question: parameters.question }),
             }
           );
-          if (!resp.ok) return `Query failed: HTTP ${resp.status}`;
+          if (!resp.ok) {
+            resolveActivity(aid, 'error', `HTTP ${resp.status}`);
+            return `Query failed: HTTP ${resp.status}`;
+          }
           const data = await resp.json();
           setGenieChartData({
             question: parameters.question,
@@ -119,13 +127,16 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
             description: data.description,
             sql: data.sql,
           });
+          const rowCount = (data.rows || []).length;
+          resolveActivity(aid, 'done', `${rowCount} result${rowCount !== 1 ? 's' : ''} returned`);
           return data.description || 'Query completed. Results are displayed on screen.';
         } catch (err) {
+          resolveActivity(aid, 'error', err instanceof Error ? err.message : 'Failed');
           return `Query failed: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
       generate_report: async (parameters: { scope?: 'global' | 'country'; iso3?: string }) => {
-        console.log('AI called generate_report:', parameters);
+        const aid = pushActivity('generate_report', 'Generating PDF report', parameters.iso3 ?? 'Global');
         let scope = parameters.scope ?? 'global';
         let iso3 = parameters.iso3;
 
@@ -150,11 +161,15 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
         }
 
         generateReport(scope as 'global' | 'country', iso3)
-          .catch((err) => console.error('Report generation failed:', err));
+          .then(() => resolveActivity(aid, 'done', `${scope} report downloading`))
+          .catch((err) => {
+            resolveActivity(aid, 'error', 'Generation failed');
+            console.error('Report generation failed:', err);
+          });
         return `Generating a ${scope} PDF report now. It will download automatically in a moment.`;
       },
       reset_view: (parameters: {}) => {
-        console.log('AI called reset_view:', parameters);
+        const aid = pushActivity('reset_view', 'Resetting view');
         setViewMode('severity');
         setComparisonData(null);
         setGenieChartData(null);
@@ -162,6 +177,7 @@ export function VoiceAgentProvider({ children }: { children: ReactNode }) {
         setIsSpotlightActive(false);
         lastNavigatedIso3Ref.current = null;
         setFlyToCoordinates({ lat: 20, lng: 0, altitude: 2.5 });
+        resolveActivity(aid, 'done');
         return 'Successfully reset the globe view to default.';
       },
       end_conversation: () => {

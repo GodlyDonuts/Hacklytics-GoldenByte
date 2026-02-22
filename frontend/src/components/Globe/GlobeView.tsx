@@ -16,6 +16,7 @@ import Globe, { GlobeInstance } from "globe.gl";
 import GlobeControls from "./GlobeControls";
 import GenieChartPanel from "./GenieChartPanel";
 import CountryDetailOverlay from "./CountryDetailOverlay";
+import AgentActivityFeed from "./AgentActivityFeed";
 import { useGlobeContext } from "@/context/GlobeContext";
 import { getGlobeCrises, GlobeCountry, getPredictiveRisks } from "@/lib/api";
 
@@ -225,7 +226,7 @@ export default function GlobeView() {
 
     const globe = new Globe(containerRef.current)
       .globeImageUrl("//unpkg.com/three-globe/example/img/earth-night.jpg")
-      .backgroundImageUrl("//unpkg.com/three-globe/example/img/night-sky.png")
+      .backgroundColor("#080c12")
       .showAtmosphere(true)
       .atmosphereColor("#00d4ff")
       .atmosphereAltitude(0.18)
@@ -454,15 +455,18 @@ export default function GlobeView() {
       <div ref={containerRef} className="w-full h-full" />
       {/* Hovered country tooltip -- bottom right corner */}
       {hoveredInfo && (
-        <div className="absolute bottom-4 right-4 rounded-lg border border-[#00d4ff]/30 bg-[#1a1d21]/90 px-4 py-3 text-sm text-white/90 backdrop-blur-sm">
-          <div className="font-semibold text-[#00e5ff]">{hoveredInfo.name} ({hoveredInfo.iso})</div>
-          <div className="text-xs text-white/60 mt-1 space-y-0.5">
+        <div className="absolute bottom-4 right-4 rounded-lg border border-[#00d4ff]/30 bg-[#1a1d21]/90 px-5 py-4 text-base text-white/90 backdrop-blur-sm">
+          <div className="font-semibold text-[#00e5ff] text-lg">{hoveredInfo.name} ({hoveredInfo.iso})</div>
+          <div className="text-sm text-white/60 mt-1.5 space-y-0.5">
             <div>Severity: {hoveredInfo.severity.toFixed(1)}</div>
             {viewMode === "anomalies" && (
               <div>Oversight: {(hoveredInfo.oversightScore * 100).toFixed(0)}%</div>
             )}
             {hoveredInfo.crisisCount > 1 && (
               <div>{hoveredInfo.crisisCount} active crises</div>
+            )}
+            {viewMode === "funding-gap" && (
+              <div>Funding Gap: {(hoveredInfo.fundingGap * 100).toFixed(0)}%</div>
             )}
           </div>
         </div>
@@ -478,6 +482,7 @@ export default function GlobeView() {
       <GlobeControls globeRef={globeRef} />
       <GenieChartPanel />
       <CountryDetailOverlay countries={data} />
+      <AgentActivityFeed />
     </div>
   );
 }

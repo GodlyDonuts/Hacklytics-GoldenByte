@@ -5,11 +5,11 @@
  *
  * Slide-in overlay that renders when genie query data is present in GlobeContext.
  * Auto-detects whether the result is chartable (string label column + numeric
- * value columns) and renders a bar chart via recharts. Always shows a data table
- * beneath the chart.
+ * value columns) and renders a horizontal bar chart via recharts. Always shows
+ * a data table beneath the chart.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   BarChart,
   Bar,
@@ -17,19 +17,20 @@ import {
   YAxis,
   Tooltip,
   ResponsiveContainer,
-  CartesianGrid,
+  Cell,
 } from "recharts";
 import { useGlobeContext, type GenieChartData } from "@/context/GlobeContext";
 
-const CHART_PALETTE = [
-  "#00d4ff",
-  "#00e5a0",
-  "#f59e0b",
-  "#ef4444",
-  "#a855f7",
-  "#ec4899",
-  "#06b6d4",
-  "#84cc16",
+/** Gradient palette -- each entry is [barColor, glowColor] */
+const BAR_GRADIENTS = [
+  ["#00d4ff", "rgba(0,212,255,0.3)"],
+  ["#00e5a0", "rgba(0,229,160,0.3)"],
+  ["#f59e0b", "rgba(245,158,11,0.3)"],
+  ["#ef4444", "rgba(239,68,68,0.3)"],
+  ["#a855f7", "rgba(168,85,247,0.3)"],
+  ["#ec4899", "rgba(236,72,153,0.3)"],
+  ["#06b6d4", "rgba(6,182,212,0.3)"],
+  ["#84cc16", "rgba(132,204,22,0.3)"],
 ];
 
 function isNumericType(type: string): boolean {
@@ -76,7 +77,6 @@ function detectChart(chartData: GenieChartData): ChartSpec | null {
   const { columns, rows } = chartData;
   if (!columns.length || !rows.length || rows.length > 50) return null;
 
-  // Find first string column as labels, all numeric columns as values
   let labelIndex = -1;
   const valueIndices: number[] = [];
 
@@ -105,8 +105,32 @@ function detectChart(chartData: GenieChartData): ChartSpec | null {
   return { labelIndex, valueIndices, data };
 }
 
+/** Custom tooltip matching the panel aesthetic */
+function ChartTooltip({ active, payload, label }: {
+  active?: boolean;
+  payload?: { name: string; value: number; color: string }[];
+  label?: string;
+}) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded-lg border border-white/10 bg-[#0d1117]/95 backdrop-blur-md px-3 py-2 shadow-xl">
+      <p className="text-xs font-medium text-white/90 mb-1">{label}</p>
+      {payload.map((entry, i) => (
+        <div key={i} className="flex items-center gap-2 text-xs">
+          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: entry.color }} />
+          <span className="text-white/50">{humanizeColumnName(entry.name)}:</span>
+          <span className="text-white font-mono font-medium">
+            {formatValue(entry.value, "INT")}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function GenieChartPanel() {
   const { genieChartData, setGenieChartData } = useGlobeContext();
+  const [showSql, setShowSql] = useState(false);
 
   const chartSpec = useMemo(() => {
     if (!genieChartData) return null;
@@ -118,97 +142,151 @@ export default function GenieChartPanel() {
   const { columns, rows, question, description, sql } = genieChartData;
   const hasData = rows.length > 0;
 
+  // For the primary value column, find the max to compute bar widths for visual ranking
+  const primaryValueCol = chartSpec
+    ? columns[chartSpec.valueIndices[0]]?.name
+    : null;
+
   return (
-    <div className="absolute top-4 left-4 z-30 w-[480px] max-h-[calc(100vh-2rem)] flex flex-col rounded-xl border border-[#00d4ff]/20 bg-[#0d1117]/95 backdrop-blur-md shadow-2xl overflow-hidden">
+    <div className="absolute top-4 left-4 z-30 w-[460px] max-h-[calc(100vh-2rem)] flex flex-col rounded-2xl border border-white/[0.08] bg-[#0a0e14]/90 backdrop-blur-xl shadow-2xl overflow-hidden">
       {/* Header */}
-      <div className="flex items-start justify-between gap-3 px-5 pt-4 pb-3 border-b border-white/10">
-        <div className="min-w-0 flex-1">
-          <p className="text-xs text-[#00d4ff] font-medium tracking-wider uppercase mb-1">
-            Query Result
-          </p>
-          <p className="text-sm text-white/90 leading-snug truncate" title={question}>
-            {question}
-          </p>
+      <div className="px-5 pt-5 pb-4 border-b border-white/[0.06]">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-1.5 h-1.5 rounded-full bg-[#00d4ff] animate-pulse" />
+              <p className="text-xs text-[#00d4ff]/80 font-semibold tracking-[0.15em] uppercase">
+                Query Result
+              </p>
+            </div>
+            <p className="text-sm text-white/90 leading-snug font-medium" title={question}>
+              {question}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setGenieChartData(null)}
+            className="shrink-0 mt-0.5 w-6 h-6 flex items-center justify-center rounded-md text-white/30 hover:text-white/80 hover:bg-white/10 transition-all"
+            aria-label="Close panel"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={() => setGenieChartData(null)}
-          className="shrink-0 mt-0.5 w-7 h-7 flex items-center justify-center rounded-md text-white/50 hover:text-white hover:bg-white/10 transition-colors"
-          aria-label="Close panel"
-        >
-          x
-        </button>
+        {description && (
+          <p className="text-sm text-white/40 leading-relaxed mt-2">{description}</p>
+        )}
       </div>
 
       {/* Scrollable body */}
-      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 custom-scrollbar">
-        {/* Description */}
-        {description && (
-          <p className="text-sm text-white/70 leading-relaxed">{description}</p>
-        )}
-
-        {/* Chart */}
-        {chartSpec && (
-          <div className="h-[220px] w-full">
+      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5 custom-scrollbar">
+        {/* Horizontal bar chart */}
+        {chartSpec && chartSpec.data.length <= 20 && (
+          <div style={{ height: Math.max(180, chartSpec.data.length * 36 + 24) }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={chartSpec.data}
-                margin={{ top: 8, right: 12, left: 4, bottom: 4 }}
+                layout="vertical"
+                margin={{ top: 4, right: 12, left: 4, bottom: 4 }}
+                barCategoryGap="20%"
               >
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                 <XAxis
-                  dataKey="label"
-                  tick={{ fill: "rgba(255,255,255,0.5)", fontSize: 10 }}
-                  axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
-                  tickLine={false}
-                  interval={0}
-                  angle={-30}
-                  textAnchor="end"
-                  height={50}
-                />
-                <YAxis
-                  tick={{ fill: "rgba(255,255,255,0.5)", fontSize: 10 }}
-                  axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
+                  type="number"
+                  tick={{ fill: "rgba(255,255,255,0.35)", fontSize: 10 }}
+                  axisLine={false}
                   tickLine={false}
                   tickFormatter={(v: number) => formatValue(v, "INT")}
                 />
+                <YAxis
+                  type="category"
+                  dataKey="label"
+                  tick={{ fill: "rgba(255,255,255,0.7)", fontSize: 11 }}
+                  axisLine={false}
+                  tickLine={false}
+                  width={100}
+                />
                 <Tooltip
-                  contentStyle={{
-                    backgroundColor: "#1a1d21",
-                    borderColor: "rgba(0,212,255,0.3)",
-                    borderRadius: "8px",
-                    color: "#fff",
-                  }}
-                  labelStyle={{ color: "#00d4ff" }}
-                  formatter={(value?: number, name?: string) => [
-                    formatValue(value ?? 0, "INT"),
-                    humanizeColumnName(name ?? ""),
-                  ]}
+                  content={<ChartTooltip />}
+                  cursor={{ fill: "rgba(255,255,255,0.03)" }}
                 />
                 {chartSpec.valueIndices.map((vi, idx) => (
                   <Bar
                     key={columns[vi].name}
                     dataKey={columns[vi].name}
-                    fill={CHART_PALETTE[idx % CHART_PALETTE.length]}
-                    radius={[3, 3, 0, 0]}
-                    barSize={chartSpec.data.length > 15 ? 12 : 20}
-                  />
+                    radius={[0, 4, 4, 0]}
+                    barSize={chartSpec.data.length > 10 ? 14 : 20}
+                  >
+                    {chartSpec.data.map((_, entryIdx) => (
+                      <Cell
+                        key={entryIdx}
+                        fill={BAR_GRADIENTS[(idx + entryIdx) % BAR_GRADIENTS.length][0]}
+                        fillOpacity={0.85}
+                      />
+                    ))}
+                  </Bar>
                 ))}
               </BarChart>
             </ResponsiveContainer>
           </div>
         )}
 
-        {/* Data table */}
-        {hasData && (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
+        {/* Inline ranked list for small result sets */}
+        {chartSpec && primaryValueCol && chartSpec.data.length <= 20 && (
+          <div className="space-y-1.5">
+            {chartSpec.data.map((row, i) => {
+              const val = row[primaryValueCol] as number;
+              const max = Math.max(
+                ...chartSpec.data.map((r) => (r[primaryValueCol] as number) || 0),
+                1
+              );
+              const pct = (val / max) * 100;
+              const color = BAR_GRADIENTS[i % BAR_GRADIENTS.length];
+              return (
+                <div key={i} className="group relative">
+                  {/* Background bar */}
+                  <div
+                    className="absolute inset-0 rounded-lg opacity-[0.07] transition-opacity group-hover:opacity-[0.12]"
+                    style={{
+                      background: `linear-gradient(90deg, ${color[0]} ${pct}%, transparent ${pct}%)`,
+                    }}
+                  />
+                  <div className="relative flex items-center justify-between px-3 py-2">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span
+                        className="text-xs font-mono font-bold w-5 text-center"
+                        style={{ color: color[0] }}
+                      >
+                        {i + 1}
+                      </span>
+                      <span className="text-sm text-white/80 truncate">
+                        {row.label}
+                      </span>
+                    </div>
+                    <span className="text-sm font-mono font-semibold text-white/90 tabular-nums">
+                      {formatValue(val, "INT")}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Data table for larger or multi-column results */}
+        {hasData && chartSpec && chartSpec.valueIndices.length > 1 && (
+          <div className="overflow-x-auto rounded-lg border border-white/[0.06]">
+            <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-white/10">
+                <tr className="border-b border-white/[0.08] bg-white/[0.02]">
                   {columns.map((col) => (
                     <th
                       key={col.name}
-                      className="text-left py-2 px-2 text-[#00d4ff]/80 font-medium whitespace-nowrap"
+                      className={`py-2.5 px-3 font-medium whitespace-nowrap ${
+                        isNumericType(col.type)
+                          ? "text-right text-white/40"
+                          : "text-left text-white/40"
+                      }`}
                     >
                       {humanizeColumnName(col.name)}
                     </th>
@@ -219,15 +297,15 @@ export default function GenieChartPanel() {
                 {rows.slice(0, 25).map((row, ri) => (
                   <tr
                     key={ri}
-                    className="border-b border-white/5 hover:bg-white/5 transition-colors"
+                    className="border-b border-white/[0.04] hover:bg-white/[0.03] transition-colors"
                   >
                     {row.map((cell, ci) => (
                       <td
                         key={ci}
-                        className={`py-1.5 px-2 whitespace-nowrap ${
+                        className={`py-2 px-3 whitespace-nowrap ${
                           isNumericType(columns[ci]?.type ?? "STRING")
-                            ? "text-right text-white/80 font-mono"
-                            : "text-white/70"
+                            ? "text-right text-white/70 font-mono tabular-nums"
+                            : "text-white/60"
                         }`}
                       >
                         {formatValue(cell, columns[ci]?.type ?? "STRING")}
@@ -238,29 +316,89 @@ export default function GenieChartPanel() {
               </tbody>
             </table>
             {rows.length > 25 && (
-              <p className="text-xs text-white/40 mt-2 text-center">
+              <p className="text-xs text-white/30 py-2 text-center">
                 Showing 25 of {rows.length} rows
               </p>
             )}
           </div>
         )}
 
+        {/* Table-only fallback when not chartable */}
+        {hasData && !chartSpec && (
+          <div className="overflow-x-auto rounded-lg border border-white/[0.06]">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-white/[0.08] bg-white/[0.02]">
+                  {columns.map((col) => (
+                    <th
+                      key={col.name}
+                      className={`py-2.5 px-3 font-medium whitespace-nowrap ${
+                        isNumericType(col.type)
+                          ? "text-right text-white/40"
+                          : "text-left text-white/40"
+                      }`}
+                    >
+                      {humanizeColumnName(col.name)}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.slice(0, 25).map((row, ri) => (
+                  <tr
+                    key={ri}
+                    className="border-b border-white/[0.04] hover:bg-white/[0.03] transition-colors"
+                  >
+                    {row.map((cell, ci) => (
+                      <td
+                        key={ci}
+                        className={`py-2 px-3 whitespace-nowrap ${
+                          isNumericType(columns[ci]?.type ?? "STRING")
+                            ? "text-right text-white/70 font-mono tabular-nums"
+                            : "text-white/60"
+                        }`}
+                      >
+                        {formatValue(cell, columns[ci]?.type ?? "STRING")}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         {!hasData && !description && (
-          <p className="text-sm text-white/40 text-center py-6">
+          <p className="text-sm text-white/30 text-center py-6">
             No data returned for this query.
           </p>
         )}
 
-        {/* SQL (collapsed) */}
+        {/* SQL toggle */}
         {sql && (
-          <details className="group">
-            <summary className="text-xs text-white/40 cursor-pointer hover:text-white/60 transition-colors">
-              View generated SQL
-            </summary>
-            <pre className="mt-2 p-3 rounded-lg bg-black/40 text-[10px] text-white/50 overflow-x-auto font-mono leading-relaxed">
-              {sql}
-            </pre>
-          </details>
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowSql(!showSql)}
+              className="flex items-center gap-1.5 text-xs text-white/25 hover:text-white/50 transition-colors tracking-wide uppercase"
+            >
+              <svg
+                width="8"
+                height="8"
+                viewBox="0 0 8 8"
+                fill="currentColor"
+                className={`transition-transform ${showSql ? "rotate-90" : ""}`}
+              >
+                <path d="M2 1l4 3-4 3z" />
+              </svg>
+              Generated SQL
+            </button>
+            {showSql && (
+              <pre className="mt-2 p-3 rounded-lg bg-black/30 border border-white/[0.04] text-xs text-white/35 overflow-x-auto font-mono leading-relaxed">
+                {sql}
+              </pre>
+            )}
+          </div>
         )}
       </div>
     </div>

@@ -17,7 +17,7 @@ export default function Globe() {
     <GlobeGL
       ref={globeRef}
       globeImageUrl="//cdn.jsdelivr.net/npm/three-globe/example/img/earth-night.jpg"
-      backgroundImageUrl="//cdn.jsdelivr.net/npm/three-globe/example/img/night-sky.png"
+      backgroundColor="#080c12"
       onPolygonClick={handleCountryClick}
       onPolygonHover={setHoveredCountry}
     />

@@ -100,14 +100,14 @@ body {
 }
 
 .body-large {
-  font-size: 1.125rem;
+  font-size: 1.25rem;
   line-height: 1.7;
   color: var(--phase-text-secondary);
   transition: color 0.6s ease;
 }
 
 .label-caps {
-  font-size: 0.75rem;
+  font-size: 0.875rem;
   font-weight: 600;
   letter-spacing: 0.15em;
   text-transform: uppercase;
@@ -257,12 +257,12 @@ body {
 
 /* Screen-space label for globe point (2D overlay, not on globe surface) */
 .point-label {
-  padding: 6px 10px;
+  padding: 8px 12px;
   background: rgba(249, 115, 22, 0.95);
   border: 1px solid #000;
   border-radius: 4px;
   color: #000;
-  font-size: 12px;
+  font-size: 14px;
   font-family: var(--font-mono), monospace;
   white-space: nowrap;
   pointer-events: none;
