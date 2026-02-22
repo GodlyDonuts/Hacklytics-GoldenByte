@@ -8,4 +8,4 @@ markdown-pdf==1.13.1
 # Optional: needed for vector_search (Actian Vector DB)
 sentence-transformers>=3.0.0
 # Cortex client from local wheel format
-./actian-vectorAI-db-beta/actiancortex-0.1.0b1-py3-none-any.whl
+./actiancortex-0.1.0b1-py3-none-any.whl
